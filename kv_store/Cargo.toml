@@ -1,0 +1,19 @@
+[package]
+name = "atelier-kv-store"
+version = "0.1.0"
+edition = "2018"
+description = "Transactional key-value database library largely modeled after LMDB"
+
+license = "MIT/Apache-2.0"
+
+[features]
+default = []
+
+# This feature enables the in-memory database implementation.
+in-mem-impl = []
+
+# This feature enables the LMDB wrapper implementation.
+lmdb-impl = ["lmdb"]
+
+[dependencies]
+lmdb = { git = "http://github.com/kabergstrom/lmdb-rs", optional = true }
