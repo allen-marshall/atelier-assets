@@ -13,7 +13,8 @@ default = []
 in-mem-impl = []
 
 # This feature enables the LMDB wrapper implementation.
-lmdb-impl = ["lmdb"]
+lmdb-impl = ["lmdb", "lmdb-sys"]
 
 [dependencies]
 lmdb = { git = "http://github.com/kabergstrom/lmdb-rs", optional = true }
+lmdb-sys = { git = "http://github.com/kabergstrom/lmdb-rs", optional = true }

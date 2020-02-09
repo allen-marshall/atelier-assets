@@ -12,6 +12,8 @@
 //! [lmdb]: http://symas.com/mdb/
 
 pub mod iter;
+#[cfg(feature = "lmdb-impl")]
+pub mod lmdb;
 
 /// Trait for handles to storage environments. A storage environment is
 /// essentially a type of session that can interact with a set of databases.
