@@ -11,6 +11,8 @@
 //!
 //! [lmdb]: http://symas.com/mdb/
 
+pub mod iter;
+
 /// Trait for handles to storage environments. A storage environment is
 /// essentially a type of session that can interact with a set of databases.
 /// Each database contains a key-value store.
@@ -389,19 +391,6 @@ pub trait Cursor<'cursor, KQ> {
     /// Value object type returned from read operations.
     type ReturnedValue;
 
-    /// A cursor can be wrapped in an iterator to provide an iteration-based
-    /// interface to a database. This is the iterator type to use for this
-    /// purpose. (The lifetime bound of `'cursor` ensures that the cursor cannot
-    /// be used directly while the iterator is manipulating it.)
-    ///
-    /// If the iterator encounters an unexpected database error during
-    /// iteration, it should produce one [`Err`][Err] value containing the
-    /// error, then stop producing values.
-    ///
-    /// [Err]: std::result::Result::Err
-    type Iter: 'cursor
-        + Iterator<Item = Result<(Self::ReturnedKey, Self::ReturnedValue), Self::Error>>;
-
     /// Retrieves the key-value pair at the cursor's current position. If the
     /// cursor's position key does not exist in the database, the first entry
     /// with a key greater than the cursor's position key is returned instead.
@@ -534,52 +523,6 @@ pub trait Cursor<'cursor, KQ> {
     ) -> Result<Option<(Self::ReturnedKey, Self::ReturnedValue)>, Self::Error>
     where
         Self: 'cursor;
-
-    /// Wraps the cursor in an iterator that starts iteration from the cursor's
-    /// current position. If the cursor is unpositioned, iteration will start
-    /// with the first key in the database; the iteration will be empty if the
-    /// database is empty and no errors occur. If the cursor has a position key,
-    /// iteration will start with the first key in the database that is greater
-    /// than (*not* equal to) that position key; the iteration will be empty if
-    /// there is no such key and no error occurs.
-    ///
-    /// This trait does not specify whether or how the cursor's position state
-    /// may be modified by the iterator. If you wish to use a cursor directly
-    /// after it has been wrapped in an iterator, it is recommended to first
-    /// reposition the cursor to a well-defined position.
-    fn iter(&'cursor mut self) -> Result<Self::Iter, Self::Error>
-    where
-        Self: 'cursor;
-
-    /// Similar to [`iter`][iter], except iteration starts at the first key in
-    /// the database regardless of the cursor's current position. The iteration
-    /// will be empty if the database is empty and no errors occur.
-    ///
-    /// This trait does not specify whether or how the cursor's position state
-    /// may be modified by the iterator. If you wish to use a cursor directly
-    /// after it has been wrapped in an iterator, it is recommended to first
-    /// reposition the cursor to a well-defined position.
-    ///
-    /// [iter]: self::Cursor::iter
-    fn iter_start(&'cursor mut self) -> Result<Self::Iter, Self::Error>
-    where
-        Self: 'cursor;
-
-    /// Similar to [`iter`][iter], except iteration starts at the specified key
-    /// regardless of the cursor's current position. More specifically,
-    /// iteration will start with the first key in the database that is greater
-    /// than *or* equal to the specified key. The iteration will be empty if
-    /// there is no such key and no error occurs.
-    ///
-    /// This trait does not specify whether or how the cursor's position state
-    /// may be modified by the iterator. If you wish to use a cursor directly
-    /// after it has been wrapped in an iterator, it is recommended to first
-    /// reposition the cursor to a well-defined position.
-    ///
-    /// [iter]: self::Cursor::iter
-    fn iter_from(&'cursor mut self, key: KQ) -> Result<Self::Iter, Self::Error>
-    where
-        Self: 'cursor;
 }
 
 /// Trait for database cursor handles that allow writing.
@@ -670,4 +613,72 @@ pub trait WriteCursor<'cursor, KQ, KP, VP>: Cursor<'cursor, KQ> {
     fn del(&'cursor mut self) -> Result<bool, Self::Error>
     where
         Self: 'cursor;
+}
+
+/// A cursor can be wrapped in an iterator to provide an iteration-based
+/// interface to a database. This trait defines the behavior for such iterators.
+///
+/// If the iterator encounters an unexpected database error during iteration, it
+/// should produce one [`Err`][Err] value containing the error, then stop
+/// producing values.
+///
+/// # Parameters
+/// - `'cursor`: Lifetime used for cursor references when constructing the
+///   iterator. This is a workaround for the lack of lifetime-generic associated
+///   types in Rust.
+/// - `C`: Type of wrapped cursor.
+/// - `KQ`: Key type that can be used to start the iteration at a specific key
+///   in the database.
+///
+/// [Err]: std::result::Result::Err
+pub trait CursorIter<'cursor, C, KQ>:
+    Sized + Iterator<Item = Result<(C::ReturnedKey, C::ReturnedValue), C::Error>>
+where
+    C: Cursor<'cursor, KQ>,
+{
+    /// Wraps the cursor in an iterator that starts iteration from the cursor's
+    /// current position. If the cursor is unpositioned, iteration will start
+    /// with the first key in the database; the iteration will be empty if the
+    /// database is empty (assuming no errors occur). If the cursor has a
+    /// position key, iteration will start with the first key in the database
+    /// that is greater than (*not* equal to) that position key; the iteration
+    /// will be empty if there is no such key (assuming no error occurs).
+    ///
+    /// This trait does not specify whether or how the cursor's position state
+    /// may be modified by the iterator. If you wish to use a cursor directly
+    /// after it has been wrapped in an iterator, it is recommended to first
+    /// reposition the cursor to a well-defined position.
+    fn iter(cursor: &'cursor mut C) -> Result<Self, C::Error>
+    where
+        C: 'cursor;
+
+    /// Similar to [`iter`][iter], except iteration starts at the first key in
+    /// the database regardless of the cursor's current position. The iteration
+    /// will be empty if the database is empty (assuming no error occurs).
+    ///
+    /// This trait does not specify whether or how the cursor's position state
+    /// may be modified by the iterator. If you wish to use a cursor directly
+    /// after it has been wrapped in an iterator, it is recommended to first
+    /// reposition the cursor to a well-defined position.
+    ///
+    /// [iter]: self::CursorIter::iter
+    fn iter_start(cursor: &'cursor mut C) -> Result<Self, C::Error>
+    where
+        C: 'cursor;
+
+    /// Similar to [`iter`][iter], except iteration starts at the specified key
+    /// regardless of the cursor's current position. More specifically,
+    /// iteration will start with the first key in the database that is greater
+    /// than *or* equal to the specified key. The iteration will be empty if
+    /// there is no such key and no error occurs.
+    ///
+    /// This trait does not specify whether or how the cursor's position state
+    /// may be modified by the iterator. If you wish to use a cursor directly
+    /// after it has been wrapped in an iterator, it is recommended to first
+    /// reposition the cursor to a well-defined position.
+    ///
+    /// [iter]: self::CursorIter::iter
+    fn iter_from(cursor: &'cursor mut C, key: KQ) -> Result<Self, C::Error>
+    where
+        C: 'cursor;
 }
