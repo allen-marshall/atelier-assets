@@ -16,7 +16,7 @@
 /// Each database contains a key-value store.
 ///
 /// # Parameters
-/// - `'s`: Lifetime used for `self` references. This is a workaround for the
+/// - `'env`: Lifetime used for `self` references. This is a workaround for the
 ///   lack of lifetime-generic associated types in Rust.
 /// - `C`: Configuration data that can be provided to initialize an environment.
 /// - `DI`: Unique ID associated with each database in the environment.
@@ -30,7 +30,7 @@
 /// - `VP`: Value type that can be used to insert an entry into a database.
 ///
 /// [sync]: self::Environment::sync
-pub trait Environment<'s, C, DI, DC, SC, KQ, KP, KV>: Sized
+pub trait Environment<'env, C, DI, DC, SC, KQ, KP, VP>: Sized
 where
     for<'txn> Self::RoTransaction: Transaction<
         'txn,
@@ -43,7 +43,7 @@ where
         'txn,
         KQ,
         KP,
-        KV,
+        VP,
         Error = Self::Error,
         Database = Self::Database,
         DbConfig = Self::DbConfig,
@@ -64,16 +64,16 @@ where
     type DbConfig;
 
     /// Handle to an active read-only transaction.
-    type RoTransaction: 's;
+    type RoTransaction: 'env;
 
     /// Handle to an active read-write transaction.
-    type RwTransaction: 's;
+    type RwTransaction: 'env;
 
     /// Initializes an environment. To close the environment, simply drop the
     /// returned environment object.
     fn new(config: C) -> Result<Self, Self::Error>
     where
-        Self: 's;
+        Self: 'env;
 
     /// Opens a database with the specified database ID. Always fails if the
     /// database does not already exist.
@@ -84,9 +84,9 @@ where
     /// Implementations may return an error in certain contexts if there are
     /// active transactions. Therefore, it is recommended to get handles to all
     /// required databases before starting any transactions.
-    fn open_db(&'s self, id: DI) -> Result<Self::Database, Self::Error>
+    fn open_db(&'env self, id: DI) -> Result<Self::Database, Self::Error>
     where
-        Self: 's;
+        Self: 'env;
 
     /// Creates and opens a database with the specified database ID and
     /// configuration. If the database already exists, its configuration may be
@@ -99,14 +99,14 @@ where
     /// Implementations may return an error in certain contexts if there are
     /// active transactions. Therefore, it is recommended to get handles to all
     /// required databases before starting any transactions.
-    fn create_db(&'s self, id: DI, config: DC) -> Result<Self::Database, Self::Error>
+    fn create_db(&'env self, id: DI, config: DC) -> Result<Self::Database, Self::Error>
     where
-        Self: 's;
+        Self: 'env;
 
     /// Gets the configuration of the specified open database.
-    fn db_config(&'s self, db: Self::Database) -> Result<Self::DbConfig, Self::Error>
+    fn db_config(&'env self, db: Self::Database) -> Result<Self::DbConfig, Self::Error>
     where
-        Self: 's;
+        Self: 'env;
 
     /// Starts a new read-only transaction.
     ///
@@ -116,9 +116,9 @@ where
     ///
     /// Read-only transactions should never be blocked by other transactions,
     /// and should never block other transactions.
-    fn begin_ro_txn(&'s self) -> Result<Self::RoTransaction, Self::Error>
+    fn begin_ro_txn(&'env self) -> Result<Self::RoTransaction, Self::Error>
     where
-        Self: 's;
+        Self: 'env;
 
     /// Starts a new read-write transaction.
     ///
@@ -131,20 +131,20 @@ where
     /// read-write transaction be active on a storage environment at a time. To
     /// enforce this, this function should block until no other read-write
     /// transaction is active.
-    fn begin_rw_txn(&'s self) -> Result<Self::RwTransaction, Self::Error>
+    fn begin_rw_txn(&'env self) -> Result<Self::RwTransaction, Self::Error>
     where
-        Self: 's;
+        Self: 'env;
 
     /// Flushes any buffered data owned by the environment, typically to disk.
     /// Implementations that don't have buffering can make this a no-op.
-    fn sync(&'s self, config: SC) -> Result<(), Self::Error>
+    fn sync(&'env self, config: SC) -> Result<(), Self::Error>
     where
-        Self: 's;
+        Self: 'env;
 
     /// Gets statistics about the environment.
-    fn stat(&'s self) -> Result<Self::Stat, Self::Error>
+    fn stat(&'env self) -> Result<Self::Stat, Self::Error>
     where
-        Self: 's;
+        Self: 'env;
 }
 
 /// Trait for transaction handles.
@@ -158,12 +158,12 @@ where
 /// automatically abort it when the transaction handle is dropped.
 ///
 /// # Parameters
-/// - `'s`: Lifetime used for `self` references. This is a workaround for the
+/// - `'txn`: Lifetime used for `self` references. This is a workaround for the
 ///   lack of lifetime-generic associated types in Rust.
 /// - `KQ`: Key type that can be used to query a database's key-value store.
 ///
 /// [Clone]: std::clone::Clone
-pub trait Transaction<'s, KQ>: Sized
+pub trait Transaction<'txn, KQ>: Sized
 where
     for<'cursor> Self::RoCursor:
         Cursor<'cursor, KQ, Error = Self::Error, ReturnedValue = Self::ReturnedValue>,
@@ -182,12 +182,12 @@ where
     type ReturnedValue;
 
     /// Read-only cursor type that can be created by the transaction.
-    type RoCursor: 's;
+    type RoCursor: 'txn;
 
     /// Commits the transaction, saving any data writes that it performed.
     fn commit(self) -> Result<(), Self::Error>
     where
-        Self: 's;
+        Self: 'txn;
 
     /// Aborts the transaction. Note that dropping the transaction handle
     /// without explicitly committing also aborts the transaction, so the only
@@ -195,7 +195,7 @@ where
     /// implementation does nothing but drop the transaction handle.
     fn abort(self)
     where
-        Self: 's,
+        Self: 'txn,
     {
     }
 
@@ -207,78 +207,78 @@ where
     /// [Ok]: std::result::Result::Ok
     /// [None]: std::option::Option::None
     fn get(
-        &'s self,
+        &'txn self,
         db: Self::Database,
         key: KQ,
     ) -> Result<Option<Self::ReturnedValue>, Self::Error>
     where
-        Self: 's;
+        Self: 'txn;
 
     /// Opens a read-only cursor for iterating over key-value pairs in the
     /// specified database.
-    fn open_ro_cursor(&'s self, db: Self::Database) -> Result<Self::RoCursor, Self::Error>
+    fn open_ro_cursor(&'txn self, db: Self::Database) -> Result<Self::RoCursor, Self::Error>
     where
-        Self: 's;
+        Self: 'txn;
 
     /// Gets the configuration of the specified open database.
-    fn db_config(&'s self, db: Self::Database) -> Result<Self::DbConfig, Self::Error>
+    fn db_config(&'txn self, db: Self::Database) -> Result<Self::DbConfig, Self::Error>
     where
-        Self: 's;
+        Self: 'txn;
 }
 
 /// Trait for transaction handles that allow writing.
 ///
 /// # Parameters
-/// - `'s`: Lifetime used for `self` references. This is a workaround for the
+/// - `'txn`: Lifetime used for `self` references. This is a workaround for the
 ///   lack of lifetime-generic associated types in Rust.
 /// - `KQ`: Key type that can be used to query a database's key-value store.
 /// - `KP`: Key type that can be used to insert an entry into a database. May or
 ///   may not be the same as `KQ`.
 /// - `VP`: Value type that can be used to insert an entry into a database.
-pub trait WriteTransaction<'s, KQ, KP, VP>: Transaction<'s, KQ>
+pub trait WriteTransaction<'txn, KQ, KP, VP>: Transaction<'txn, KQ>
 where
     for<'cursor> Self::RwCursor:
         WriteCursor<'cursor, KQ, KP, VP, Error = Self::Error, ReturnedValue = Self::ReturnedValue>,
 {
     /// Read-only cursor type that can be created by the transaction.
-    type RwCursor: 's;
+    type RwCursor: 'txn;
 
     /// Stores the specified key-value pair in the specified database. If the
     /// database already contains an entry for the specified key, the old entry
     /// will be overwritten.
-    fn put(&'s mut self, db: Self::Database, key: KP, value: VP) -> Result<(), Self::Error>
+    fn put(&'txn mut self, db: Self::Database, key: KP, value: VP) -> Result<(), Self::Error>
     where
-        Self: 's;
+        Self: 'txn;
 
     /// Stores the specified key-value pair in the specified database, if the
     /// database does not already contain an entry for the specified key. On
     /// success, returns `true` if the entry was stored and `false` if there was
     /// already an entry in the database with the specified key.
     fn put_no_overwrite(
-        &'s mut self,
+        &'txn mut self,
         db: Self::Database,
         key: KP,
         value: VP,
     ) -> Result<bool, Self::Error>
     where
-        Self: 's;
+        Self: 'txn;
 
     /// Deletes the entry for the specified key from the specified database, if
     /// there is such an entry. On success, returns `true` if a deletion was
     /// performed and `false` if the entry to delete did not exist.
-    fn del(&'s mut self, db: Self::Database, key: KQ) -> Result<bool, Self::Error>
+    fn del(&'txn mut self, db: Self::Database, key: KQ) -> Result<bool, Self::Error>
     where
-        Self: 's;
+        Self: 'txn;
 
     /// Removes all entries from the specified database.
-    fn clear_db(&'s mut self, db: Self::Database) -> Result<(), Self::Error>
+    fn clear_db(&'txn mut self, db: Self::Database) -> Result<(), Self::Error>
     where
-        Self: 's;
+        Self: 'txn;
 
     /// Opens a read-write cursor to operate on the specified database.
-    fn open_rw_cursor(&'s mut self, db: Self::Database) -> Result<Self::RwCursor, Self::Error>
+    fn open_rw_cursor(&'txn mut self, db: Self::Database) -> Result<Self::RwCursor, Self::Error>
     where
-        Self: 's;
+        Self: 'txn;
 }
 
 /// Trait for transaction handles that allow the creation of nested
@@ -290,15 +290,15 @@ where
 /// accessed while it has an active child.
 ///
 /// # Parameters
-/// - `'s`: Lifetime used for `self` references. This is a workaround for the
+/// - `'txn`: Lifetime used for `self` references. This is a workaround for the
 ///   lack of lifetime-generic associated types in Rust.
 /// - `KQ`: Key type that can be used to query a database's key-value store.
-pub trait NestableTransaction<'s, KQ>: Transaction<'s, KQ>
+pub trait NestableTransaction<'txn, KQ>: Transaction<'txn, KQ>
 where
     for<'nest> Self::Nested: Transaction<'nest, KQ>,
 {
     /// Child transaction type. May or may not be the same type as `Self`.
-    type Nested: 's;
+    type Nested: 'txn;
 
     /// Begins a child transaction nested inside `self`.
     ///
@@ -309,9 +309,9 @@ where
     /// immediately visible to the parent transaction, but should *not* be
     /// visible to any other transactions until the parent transaction is
     /// committed.
-    fn begin_nested_txn(&'s mut self) -> Result<Self::Nested, Self::Error>
+    fn begin_nested_txn(&'txn mut self) -> Result<Self::Nested, Self::Error>
     where
-        Self: 's;
+        Self: 'txn;
 }
 
 /// Trait for types whose objects hold some resource, which would normally be
@@ -372,13 +372,13 @@ pub trait InactiveRenewable<A> {
 /// by the database be compatible with the ordering defined by [`Ord`][Ord].
 ///
 /// # Parameters
-/// - `'s`: Lifetime used for `self` references. This is a workaround for the
-///   lack of lifetime-generic associated types in Rust.
+/// - `'cursor`: Lifetime used for `self` references. This is a workaround for
+///   the lack of lifetime-generic associated types in Rust.
 /// - `KQ`: Key type that can be used to point the cursor to a specific key in
 ///   the database.
 ///
 /// [Ord]: std::cmp::Ord
-pub trait Cursor<'s, KQ> {
+pub trait Cursor<'cursor, KQ> {
     /// Type of error that may occur when operating on the cursor.
     type Error;
 
@@ -391,15 +391,16 @@ pub trait Cursor<'s, KQ> {
 
     /// A cursor can be wrapped in an iterator to provide an iteration-based
     /// interface to a database. This is the iterator type to use for this
-    /// purpose. (The lifetime bound of `'s` ensures that the cursor cannot be
-    /// used directly while the iterator is manipulating it.)
+    /// purpose. (The lifetime bound of `'cursor` ensures that the cursor cannot
+    /// be used directly while the iterator is manipulating it.)
     ///
     /// If the iterator encounters an unexpected database error during
     /// iteration, it should produce one [`Err`][Err] value containing the
     /// error, then stop producing values.
     ///
     /// [Err]: std::result::Result::Err
-    type Iter: 's + Iterator<Item = Result<(Self::ReturnedKey, Self::ReturnedValue), Self::Error>>;
+    type Iter: 'cursor
+        + Iterator<Item = Result<(Self::ReturnedKey, Self::ReturnedValue), Self::Error>>;
 
     /// Retrieves the key-value pair at the cursor's current position. If the
     /// cursor's position key does not exist in the database, the first entry
@@ -414,9 +415,9 @@ pub trait Cursor<'s, KQ> {
     ///
     /// [Ok]: std::result::Result::Ok
     /// [None]: std::option::Option::None
-    fn get(&'s self) -> Result<Option<(Self::ReturnedKey, Self::ReturnedValue)>, Self::Error>
+    fn get(&'cursor self) -> Result<Option<(Self::ReturnedKey, Self::ReturnedValue)>, Self::Error>
     where
-        Self: 's;
+        Self: 'cursor;
 
     /// Repositions the cursor to the first key in the database, and retrieves
     /// the corresponding key-value pair.
@@ -428,10 +429,10 @@ pub trait Cursor<'s, KQ> {
     /// [Ok]: std::result::Result::Ok
     /// [None]: std::option::Option::None
     fn move_to_first(
-        &'s mut self,
+        &'cursor mut self,
     ) -> Result<Option<(Self::ReturnedKey, Self::ReturnedValue)>, Self::Error>
     where
-        Self: 's;
+        Self: 'cursor;
 
     /// Repositions the cursor to the last key in the database, and retrieves
     /// the corresponding key-value pair.
@@ -443,10 +444,10 @@ pub trait Cursor<'s, KQ> {
     /// [Ok]: std::result::Result::Ok
     /// [None]: std::option::Option::None
     fn move_to_last(
-        &'s mut self,
+        &'cursor mut self,
     ) -> Result<Option<(Self::ReturnedKey, Self::ReturnedValue)>, Self::Error>
     where
-        Self: 's;
+        Self: 'cursor;
 
     /// Repositions the cursor to the first key in the database that is greater
     /// than the cursor's current position key, and retrieves the database entry
@@ -463,10 +464,10 @@ pub trait Cursor<'s, KQ> {
     /// [Ok]: std::result::Result::Ok
     /// [None]: std::option::Option::None
     fn move_to_next(
-        &'s mut self,
+        &'cursor mut self,
     ) -> Result<Option<(Self::ReturnedKey, Self::ReturnedValue)>, Self::Error>
     where
-        Self: 's;
+        Self: 'cursor;
 
     /// Repositions the cursor to the last key in the database that is less than
     /// the cursor's current position key, and retrieves the database entry
@@ -483,10 +484,10 @@ pub trait Cursor<'s, KQ> {
     /// [Ok]: std::result::Result::Ok
     /// [None]: std::option::Option::None
     fn move_to_prev(
-        &'s mut self,
+        &'cursor mut self,
     ) -> Result<Option<(Self::ReturnedKey, Self::ReturnedValue)>, Self::Error>
     where
-        Self: 's;
+        Self: 'cursor;
 
     /// Repositions the cursor to the specified key, and retrieves the value
     /// associated with that key in the database.
@@ -498,9 +499,9 @@ pub trait Cursor<'s, KQ> {
     ///
     /// [Ok]: std::result::Result::Ok
     /// [None]: std::option::Option::None
-    fn move_to_key(&'s mut self, key: KQ) -> Result<Option<Self::ReturnedValue>, Self::Error>
+    fn move_to_key(&'cursor mut self, key: KQ) -> Result<Option<Self::ReturnedValue>, Self::Error>
     where
-        Self: 's;
+        Self: 'cursor;
 
     /// Same as [`move_to_key`][move_to_key], except that after the reposition,
     /// it retrieves the key as well as the value. Retrieving the key is often
@@ -510,11 +511,11 @@ pub trait Cursor<'s, KQ> {
     ///
     /// [move_to_key]: self::Cursor::move_to_key
     fn move_to_key_and_get_key(
-        &'s mut self,
+        &'cursor mut self,
         key: KQ,
     ) -> Result<Option<(Self::ReturnedKey, Self::ReturnedValue)>, Self::Error>
     where
-        Self: 's;
+        Self: 'cursor;
 
     /// Repositions the cursor to the first key in the database that is greater
     /// than or equal to the specified key, and retrieves the corresponding
@@ -528,11 +529,11 @@ pub trait Cursor<'s, KQ> {
     /// [Ok]: std::result::Result::Ok
     /// [None]: std::option::Option::None
     fn move_to_key_or_after(
-        &'s mut self,
+        &'cursor mut self,
         key: KQ,
     ) -> Result<Option<(Self::ReturnedKey, Self::ReturnedValue)>, Self::Error>
     where
-        Self: 's;
+        Self: 'cursor;
 
     /// Wraps the cursor in an iterator that starts iteration from the cursor's
     /// current position. If the cursor is unpositioned, iteration will start
@@ -546,9 +547,9 @@ pub trait Cursor<'s, KQ> {
     /// may be modified by the iterator. If you wish to use a cursor directly
     /// after it has been wrapped in an iterator, it is recommended to first
     /// reposition the cursor to a well-defined position.
-    fn iter(&'s mut self) -> Result<Self::Iter, Self::Error>
+    fn iter(&'cursor mut self) -> Result<Self::Iter, Self::Error>
     where
-        Self: 's;
+        Self: 'cursor;
 
     /// Similar to [`iter`][iter], except iteration starts at the first key in
     /// the database regardless of the cursor's current position. The iteration
@@ -560,9 +561,9 @@ pub trait Cursor<'s, KQ> {
     /// reposition the cursor to a well-defined position.
     ///
     /// [iter]: self::Cursor::iter
-    fn iter_start(&'s mut self) -> Result<Self::Iter, Self::Error>
+    fn iter_start(&'cursor mut self) -> Result<Self::Iter, Self::Error>
     where
-        Self: 's;
+        Self: 'cursor;
 
     /// Similar to [`iter`][iter], except iteration starts at the specified key
     /// regardless of the cursor's current position. More specifically,
@@ -576,22 +577,22 @@ pub trait Cursor<'s, KQ> {
     /// reposition the cursor to a well-defined position.
     ///
     /// [iter]: self::Cursor::iter
-    fn iter_from(&'s mut self, key: KQ) -> Result<Self::Iter, Self::Error>
+    fn iter_from(&'cursor mut self, key: KQ) -> Result<Self::Iter, Self::Error>
     where
-        Self: 's;
+        Self: 'cursor;
 }
 
 /// Trait for database cursor handles that allow writing.
 ///
 /// # Parameters
-/// - `'s`: Lifetime used for `self` references. This is a workaround for the
-///   lack of lifetime-generic associated types in Rust.
+/// - `'cursor`: Lifetime used for `self` references. This is a workaround for
+///   the lack of lifetime-generic associated types in Rust.
 /// - `KQ`: Key type that can be used to point the cursor to a specific key in
 ///   the database.
 /// - `KP`: Key type that can be used to insert an entry into the database. May
 ///   or may not be the same as `KQ`.
 /// - `VP`: Value type that can be used to insert an entry into the database.
-pub trait WriteCursor<'s, KQ, KP, VP>: Cursor<'s, KQ> {
+pub trait WriteCursor<'cursor, KQ, KP, VP>: Cursor<'cursor, KQ> {
     /// Overwrites a value in the database based on the cursor's position state,
     /// without modifying the position state. There are a few possible cases
     /// that determine the behavior:
@@ -612,16 +613,16 @@ pub trait WriteCursor<'s, KQ, KP, VP>: Cursor<'s, KQ> {
     ///   (assuming no error occurs).
     ///
     /// [Ok]: std::result::Result::Ok
-    fn put(&'s mut self, value: VP) -> Result<bool, Self::Error>
+    fn put(&'cursor mut self, value: VP) -> Result<bool, Self::Error>
     where
-        Self: 's;
+        Self: 'cursor;
 
     /// Sets the value of the database entry with the specified key (inserting
     /// the entry if it doesn't already exist), and repositions the cursor to
     /// that key.
-    fn put_and_move_to_key(&'s mut self, key: KP, value: VP) -> Result<(), Self::Error>
+    fn put_and_move_to_key(&'cursor mut self, key: KP, value: VP) -> Result<(), Self::Error>
     where
-        Self: 's;
+        Self: 'cursor;
 
     /// Inserts the specified key-value pair into the database *if* the database
     /// does not already contain an entry for the specified key, and repositions
@@ -634,12 +635,12 @@ pub trait WriteCursor<'s, KQ, KP, VP>: Cursor<'s, KQ> {
     ///
     /// [Ok]: std::result::Result::Ok
     fn put_no_overwrite_and_move_to_key(
-        &'s mut self,
+        &'cursor mut self,
         key: KP,
         value: VP,
     ) -> Result<bool, Self::Error>
     where
-        Self: 's;
+        Self: 'cursor;
 
     /// Deletes an entry from the database based on the cursor's position state,
     /// without modifying the position state. There are a few possible cases
@@ -666,7 +667,7 @@ pub trait WriteCursor<'s, KQ, KP, VP>: Cursor<'s, KQ> {
     /// exist in the database.
     ///
     /// [Ok]: std::result::Result::Ok
-    fn del(&'s mut self) -> Result<bool, Self::Error>
+    fn del(&'cursor mut self) -> Result<bool, Self::Error>
     where
-        Self: 's;
+        Self: 'cursor;
 }
