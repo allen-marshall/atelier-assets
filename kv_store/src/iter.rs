@@ -1,10 +1,10 @@
 //! This module provides an iterator type that implements
-//! [`CursorIter`][CursorIter]. It is largely independent of the specific API
-//! implementation in use.
+//! [`CursorIterator`][CursorIterator] for cursors that meet certain
+//! requirements.
 //!
-//! [CursorIter]: crate::CursorIter
+//! [CursorIterator]: crate::CursorIterator
 
-use crate::Cursor;
+use crate::{Cursor, CursorIterator};
 use std::iter::FusedIterator;
 use std::marker::PhantomData;
 
@@ -31,30 +31,27 @@ enum IterState {
 /// Iterator type that simply wraps a database cursor.
 ///
 /// # Parameters
+/// - `'txn`: Lifetime of the transaction reference used to construct the
+///   cursor.
 /// - `'cursor`: Lifetime for the wrapped cursor reference.
 /// - `C`: Cursor type to wrap.
-/// - `E`: Error type that can be produced by the cursor.
-/// - `KQ`: Key type that can be used to point the cursor to a specific key in
-///   the database.
-/// - `KR`: Key object type returned from cursor read operations. May or may not
-///   be the same as `KQ`.
-/// - `VR`: Value object type returned from cursor read operations.
+/// - `KQ`: Key type that can be used to position the cursor at a specific key.
 #[derive(Debug)]
-pub struct Iter<'cursor, C, E, KQ, KR, VR> {
+pub struct CursorIter<'txn, 'cursor, C, KQ> {
     /// The wrapped cursor.
     cursor: &'cursor mut C,
 
     /// Extra state information for the iterator.
     state: IterState,
 
-    phantom: PhantomData<(E, KQ, KR, VR)>,
+    phantom: PhantomData<(&'txn (), KQ)>,
 }
 
-impl<'cursor, C, E, KQ, KR, VR> Iterator for Iter<'cursor, C, E, KQ, KR, VR>
+impl<'txn, 'cursor, C, KQ> Iterator for CursorIter<'txn, 'cursor, C, KQ>
 where
-    for<'cursor2> C: Cursor<'cursor2, KQ, Error = E, ReturnedKey = KR, ReturnedValue = VR>,
+    C: 'txn + Cursor<'txn, KQ>,
 {
-    type Item = Result<(KR, VR), E>;
+    type Item = Result<(C::ReturnedKey, C::ReturnedValue), C::Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.state == IterState::Finished {
@@ -86,19 +83,19 @@ where
     }
 }
 
-impl<'cursor, C, E, KQ, KR, VR> FusedIterator for Iter<'cursor, C, E, KQ, KR, VR> where
-    for<'cursor2> C: Cursor<'cursor2, KQ, Error = E, ReturnedKey = KR, ReturnedValue = VR>
+impl<'txn, 'cursor, C, KQ> FusedIterator for CursorIter<'txn, 'cursor, C, KQ> where
+    C: 'txn + Cursor<'txn, KQ>
 {
 }
 
-impl<'cursor, C, E, KQ, KR, VR> crate::CursorIter<'cursor, C, KQ>
-    for Iter<'cursor, C, E, KQ, KR, VR>
+impl<'txn, 'cursor, C, KQ> CursorIterator<'txn, 'cursor, C, KQ> for CursorIter<'txn, 'cursor, C, KQ>
 where
-    for<'cursor2> C: Cursor<'cursor2, KQ, Error = E, ReturnedKey = KR, ReturnedValue = VR>,
+    C: 'txn + Cursor<'txn, KQ>,
 {
-    fn iter(cursor: &'cursor mut C) -> Result<Self, E>
+    fn iter(cursor: &'cursor mut C) -> Result<Self, C::Error>
     where
-        for<'a> C: Cursor<'a, KQ, Error = E, ReturnedKey = KR, ReturnedValue = VR>,
+        Self: 'cursor,
+        C: 'cursor,
     {
         Ok(Self {
             cursor,
@@ -107,9 +104,10 @@ where
         })
     }
 
-    fn iter_start(cursor: &'cursor mut C) -> Result<Self, E>
+    fn iter_start(cursor: &'cursor mut C) -> Result<Self, C::Error>
     where
-        for<'a> C: Cursor<'a, KQ, Error = E, ReturnedKey = KR, ReturnedValue = VR>,
+        Self: 'cursor,
+        C: 'cursor,
     {
         Ok(Self {
             cursor,
@@ -118,11 +116,12 @@ where
         })
     }
 
-    fn iter_from(cursor: &'cursor mut C, key: KQ) -> Result<Self, E>
+    fn iter_from(cursor: &'cursor mut C, key: KQ) -> Result<Self, C::Error>
     where
-        for<'a> C: Cursor<'a, KQ, Error = E, ReturnedKey = KR, ReturnedValue = VR>,
+        Self: 'cursor,
+        C: 'cursor,
     {
-        let cursor_result = cursor.move_to_key(key)?;
+        let cursor_result = cursor.move_to_key_or_after(key)?;
         if cursor_result.is_some() {
             Ok(Self {
                 cursor,

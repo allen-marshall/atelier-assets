@@ -140,9 +140,10 @@ fn db_config_allows_dup_keys(config: DbConfig) -> bool {
     )
 }
 
-impl<'env, 'cfg, 'envb, 'path, 'dbid, 'kq, 'kp, 'vp, KQ, KP, VP>
-    crate::Environment<
+impl<'cfg, 'envb, 'path, 'dbid, 'env, 'txn, 'kq, 'kp, 'vp, KQ, KP, VP>
+    crate::StorageInterface<
         'env,
+        'txn,
         &'cfg EnvironmentConfig<'envb, 'path>,
         Option<&'dbid str>,
         DbConfig,
@@ -156,26 +157,33 @@ where
     KP: AsRef<[u8]>,
     VP: AsRef<[u8]>,
 {
+    type RoTransaction = RoTransaction<'env>;
+    type RwTransaction = RwTransaction<'env>;
+    type RoTxnRoCursor = RoCursor<'txn>;
+    type RwTxnRoCursor = RoCursor<'txn>;
+    type RwTxnRwCursor = RwCursor<'txn>;
+}
+
+impl<'cfg, 'envb, 'path, 'dbid>
+    crate::Environment<
+        &'cfg EnvironmentConfig<'envb, 'path>,
+        Option<&'dbid str>,
+        DbConfig,
+        SyncConfig,
+    > for Environment
+{
     type Error = Error;
     type Stat = Stat;
     type Database = Database;
-    type DbConfig = DbConfig;
-    type RoTransaction = RoTransaction<'env>;
-    type RwTransaction = RwTransaction<'env>;
+    type ReturnedDbConfig = DbConfig;
 
-    fn new(config: &'cfg EnvironmentConfig<'envb, 'path>) -> Result<Self, Self::Error>
-    where
-        Self: 'env,
-    {
+    fn new(config: &'cfg EnvironmentConfig<'envb, 'path>) -> Result<Self, Self::Error> {
         Ok(Self {
             env: config.open()?,
         })
     }
 
-    fn open_db(&'env self, id: Option<&'dbid str>) -> Result<Self::Database, Self::Error>
-    where
-        Self: 'env,
-    {
+    fn open_db(&self, id: Option<&'dbid str>) -> Result<Self::Database, Self::Error> {
         let db = self.env.open_db(id)?;
 
         // Make sure we aren't opening a preexisting database with an
@@ -188,13 +196,10 @@ where
     }
 
     fn create_db(
-        &'env self,
+        &self,
         id: Option<&'dbid str>,
         config: DbConfig,
-    ) -> Result<Self::Database, Self::Error>
-    where
-        Self: 'env,
-    {
+    ) -> Result<Self::Database, Self::Error> {
         // Make sure the requested configuration is supported.
         if db_config_allows_dup_keys(config) {
             Err(DbConfigError::DupKeysSpecified.into())
@@ -203,42 +208,15 @@ where
         }
     }
 
-    fn db_config(&'env self, db: Self::Database) -> Result<Self::DbConfig, Self::Error>
-    where
-        Self: 'env,
-    {
+    fn db_config(&self, db: Self::Database) -> Result<Self::ReturnedDbConfig, Self::Error> {
         self.env.get_db_flags(db).map_err(Into::into)
     }
 
-    fn begin_ro_txn(&'env self) -> Result<Self::RoTransaction, Self::Error>
-    where
-        Self: 'env,
-    {
-        Ok(RoTransaction {
-            txn: self.env.begin_ro_txn()?,
-        })
-    }
-
-    fn begin_rw_txn(&'env self) -> Result<Self::RwTransaction, Self::Error>
-    where
-        Self: 'env,
-    {
-        Ok(RwTransaction {
-            txn: self.env.begin_rw_txn()?,
-        })
-    }
-
-    fn sync(&'env self, config: SyncConfig) -> Result<(), Self::Error>
-    where
-        Self: 'env,
-    {
+    fn sync(&self, config: SyncConfig) -> Result<(), Self::Error> {
         self.env.sync(config).map_err(Into::into)
     }
 
-    fn stat(&'env self) -> Result<Self::Stat, Self::Error>
-    where
-        Self: 'env,
-    {
+    fn stat(&self) -> Result<Self::Stat, Self::Error> {
         self.env.stat().map_err(Into::into)
     }
 }
@@ -256,9 +234,8 @@ where
 {
     type Error = Error;
     type Database = Database;
-    type DbConfig = DbConfig;
+    type ReturnedDbConfig = DbConfig;
     type ReturnedValue = &'txn [u8];
-    type RoCursor = RoCursor<'txn>;
 
     fn commit(self) -> Result<(), Self::Error>
     where
@@ -283,20 +260,46 @@ where
         }
     }
 
-    fn open_ro_cursor(&'txn self, db: Self::Database) -> Result<Self::RoCursor, Self::Error>
-    where
-        Self: 'txn,
-    {
-        Ok(RoCursor {
-            cursor: self.txn.open_ro_cursor(db)?,
-        })
-    }
-
-    fn db_config(&'txn self, db: Self::Database) -> Result<Self::DbConfig, Self::Error>
+    fn db_config(&'txn self, db: Self::Database) -> Result<Self::ReturnedDbConfig, Self::Error>
     where
         Self: 'txn,
     {
         self.txn.db_flags(db).map_err(Into::into)
+    }
+}
+
+impl<'cfg, 'envb, 'path, 'dbid, 'env, 'txn, 'kq, KQ>
+    crate::RootTransaction<
+        'env,
+        'txn,
+        Environment,
+        &'cfg EnvironmentConfig<'envb, 'path>,
+        Option<&'dbid str>,
+        DbConfig,
+        SyncConfig,
+        &'kq KQ,
+    > for RoTransaction<'env>
+where
+    KQ: AsRef<[u8]>,
+{
+    fn open(
+        env: &'env Environment,
+    ) -> Result<
+        Self,
+        <Environment as crate::Environment<
+            &'cfg EnvironmentConfig<'envb, 'path>,
+            Option<&'dbid str>,
+            DbConfig,
+            SyncConfig,
+        >>::Error,
+    >
+    where
+        Self: 'env,
+        'env: 'txn,
+    {
+        Ok(Self {
+            txn: env.env.begin_ro_txn()?,
+        })
     }
 }
 
@@ -340,9 +343,8 @@ where
 {
     type Error = Error;
     type Database = Database;
-    type DbConfig = DbConfig;
+    type ReturnedDbConfig = DbConfig;
     type ReturnedValue = &'txn [u8];
-    type RoCursor = RoCursor<'txn>;
 
     fn commit(self) -> Result<(), Self::Error>
     where
@@ -367,16 +369,7 @@ where
         }
     }
 
-    fn open_ro_cursor(&'txn self, db: Self::Database) -> Result<Self::RoCursor, Self::Error>
-    where
-        Self: 'txn,
-    {
-        Ok(RoCursor {
-            cursor: self.txn.open_ro_cursor(db)?,
-        })
-    }
-
-    fn db_config(&'txn self, db: Self::Database) -> Result<Self::DbConfig, Self::Error>
+    fn db_config(&'txn self, db: Self::Database) -> Result<Self::ReturnedDbConfig, Self::Error>
     where
         Self: 'txn,
     {
@@ -384,15 +377,13 @@ where
     }
 }
 
-impl<'env, 'txn, 'kq, 'kp, 'vp, KQ, KP, VP> crate::WriteTransaction<'txn, &'kq KQ, &'kp KP, &'vp VP>
-    for RwTransaction<'env>
+impl<'env, 'txn, 'kq, 'kp, 'vp, KQ, KP, VP>
+    crate::ReadWriteTransaction<'txn, &'kq KQ, &'kp KP, &'vp VP> for RwTransaction<'env>
 where
     KQ: AsRef<[u8]>,
     KP: AsRef<[u8]>,
     VP: AsRef<[u8]>,
 {
-    type RwCursor = RwCursor<'txn>;
-
     fn put(
         &'txn mut self,
         db: Self::Database,
@@ -442,29 +433,55 @@ where
     {
         self.txn.clear_db(db).map_err(Into::into)
     }
+}
 
-    fn open_rw_cursor(&'txn mut self, db: Self::Database) -> Result<Self::RwCursor, Self::Error>
+impl<'cfg, 'envb, 'path, 'dbid, 'env, 'txn, 'kq, KQ>
+    crate::RootTransaction<
+        'env,
+        'txn,
+        Environment,
+        &'cfg EnvironmentConfig<'envb, 'path>,
+        Option<&'dbid str>,
+        DbConfig,
+        SyncConfig,
+        &'kq KQ,
+    > for RwTransaction<'env>
+where
+    KQ: AsRef<[u8]>,
+{
+    fn open(
+        env: &'env Environment,
+    ) -> Result<
+        Self,
+        <Environment as crate::Environment<
+            &'cfg EnvironmentConfig<'envb, 'path>,
+            Option<&'dbid str>,
+            DbConfig,
+            SyncConfig,
+        >>::Error,
+    >
     where
-        Self: 'txn,
+        Self: 'env,
+        'env: 'txn,
     {
-        Ok(RwCursor {
-            cursor: self.txn.open_rw_cursor(db)?,
+        Ok(Self {
+            txn: env.env.begin_rw_txn()?,
         })
     }
 }
 
-impl<'env, 'txn, 'kq, KQ> crate::NestableTransaction<'txn, &'kq KQ> for RwTransaction<'env>
+impl<'env, 'parent, 'txn, 'kq, KQ>
+    crate::NestedTransaction<'parent, 'txn, RwTransaction<'env>, &'kq KQ> for RwTransaction<'parent>
 where
     KQ: AsRef<[u8]>,
 {
-    type Nested = RwTransaction<'txn>;
-
-    fn begin_nested_txn(&'txn mut self) -> Result<Self::Nested, Self::Error>
+    fn nest(parent: &'parent mut RwTransaction<'env>) -> Result<Self, Self::Error>
     where
-        Self: 'txn,
+        Self: 'parent,
+        'parent: 'txn,
     {
-        Ok(RwTransaction {
-            txn: self.txn.begin_nested_txn()?,
+        Ok(Self {
+            txn: parent.txn.begin_nested_txn()?,
         })
     }
 }
@@ -519,7 +536,7 @@ pub struct RoCursor<'txn> {
     cursor: lmdb::RoCursor<'txn>,
 }
 
-impl<'txn, 'cursor, 'kq, KQ> crate::Cursor<'cursor, &'kq KQ> for RoCursor<'txn>
+impl<'txn, 'kq, KQ> crate::Cursor<'txn, &'kq KQ> for RoCursor<'txn>
 where
     KQ: AsRef<[u8]>,
 {
@@ -527,65 +544,62 @@ where
     type ReturnedKey = &'txn [u8];
     type ReturnedValue = &'txn [u8];
 
-    fn get(&'cursor self) -> Result<Option<(Self::ReturnedKey, Self::ReturnedValue)>, Self::Error>
+    fn get(&self) -> Result<Option<(Self::ReturnedKey, Self::ReturnedValue)>, Self::Error>
     where
-        Self: 'cursor,
+        Self: 'txn,
     {
         lmdb_cursor_result_to_kv_pair(self.cursor.get(None, None, lmdb_sys::MDB_GET_CURRENT))
     }
 
     fn move_to_first(
-        &'cursor mut self,
+        &mut self,
     ) -> Result<Option<(Self::ReturnedKey, Self::ReturnedValue)>, Self::Error>
     where
-        Self: 'cursor,
+        Self: 'txn,
     {
         lmdb_cursor_result_to_kv_pair(self.cursor.get(None, None, lmdb_sys::MDB_FIRST))
     }
 
     fn move_to_last(
-        &'cursor mut self,
+        &mut self,
     ) -> Result<Option<(Self::ReturnedKey, Self::ReturnedValue)>, Self::Error>
     where
-        Self: 'cursor,
+        Self: 'txn,
     {
         lmdb_cursor_result_to_kv_pair(self.cursor.get(None, None, lmdb_sys::MDB_LAST))
     }
 
     fn move_to_next(
-        &'cursor mut self,
+        &mut self,
     ) -> Result<Option<(Self::ReturnedKey, Self::ReturnedValue)>, Self::Error>
     where
-        Self: 'cursor,
+        Self: 'txn,
     {
         lmdb_cursor_result_to_kv_pair(self.cursor.get(None, None, lmdb_sys::MDB_NEXT))
     }
 
     fn move_to_prev(
-        &'cursor mut self,
+        &mut self,
     ) -> Result<Option<(Self::ReturnedKey, Self::ReturnedValue)>, Self::Error>
     where
-        Self: 'cursor,
+        Self: 'txn,
     {
         lmdb_cursor_result_to_kv_pair(self.cursor.get(None, None, lmdb_sys::MDB_PREV))
     }
 
-    fn move_to_key(
-        &'cursor mut self,
-        key: &'kq KQ,
-    ) -> Result<Option<Self::ReturnedValue>, Self::Error>
+    fn move_to_key(&mut self, key: &'kq KQ) -> Result<Option<Self::ReturnedValue>, Self::Error>
     where
-        Self: 'cursor,
+        Self: 'txn,
     {
         lmdb_cursor_result_to_value(self.cursor.get(Some(key.as_ref()), None, lmdb_sys::MDB_SET))
     }
 
     fn move_to_key_and_get_key(
-        &'cursor mut self,
+        &mut self,
         key: &'kq KQ,
     ) -> Result<Option<(Self::ReturnedKey, Self::ReturnedValue)>, Self::Error>
     where
-        Self: 'cursor,
+        Self: 'txn,
     {
         lmdb_cursor_result_to_kv_pair(self.cursor.get(
             Some(key.as_ref()),
@@ -595,17 +609,55 @@ where
     }
 
     fn move_to_key_or_after(
-        &'cursor mut self,
+        &mut self,
         key: &'kq KQ,
     ) -> Result<Option<(Self::ReturnedKey, Self::ReturnedValue)>, Self::Error>
     where
-        Self: 'cursor,
+        Self: 'txn,
     {
         lmdb_cursor_result_to_kv_pair(self.cursor.get(
             Some(key.as_ref()),
             None,
             lmdb_sys::MDB_SET_RANGE,
         ))
+    }
+}
+
+impl<'env, 'txn, 'kq, KQ> crate::ReadOnlyCursor<'txn, RoTransaction<'env>, &'kq KQ>
+    for RoCursor<'txn>
+where
+    KQ: AsRef<[u8]>,
+{
+    fn open(
+        txn: &'txn RoTransaction<'env>,
+        db: <RoTransaction as crate::Transaction<'txn, &'kq KQ>>::Database,
+    ) -> Result<Self, Self::Error>
+    where
+        RoTransaction<'env>: 'txn,
+        Self: 'txn,
+    {
+        Ok(Self {
+            cursor: txn.txn.open_ro_cursor(db)?,
+        })
+    }
+}
+
+impl<'env, 'txn, 'kq, KQ> crate::ReadOnlyCursor<'txn, RwTransaction<'env>, &'kq KQ>
+    for RoCursor<'txn>
+where
+    KQ: AsRef<[u8]>,
+{
+    fn open(
+        txn: &'txn RwTransaction<'env>,
+        db: <RoTransaction as crate::Transaction<'txn, &'kq KQ>>::Database,
+    ) -> Result<Self, Self::Error>
+    where
+        RoTransaction<'env>: 'txn,
+        Self: 'txn,
+    {
+        Ok(Self {
+            cursor: txn.txn.open_ro_cursor(db)?,
+        })
     }
 }
 
@@ -616,7 +668,7 @@ pub struct RwCursor<'txn> {
     cursor: lmdb::RwCursor<'txn>,
 }
 
-impl<'txn, 'cursor, 'kq, KQ> crate::Cursor<'cursor, &'kq KQ> for RwCursor<'txn>
+impl<'txn, 'kq, KQ> crate::Cursor<'txn, &'kq KQ> for RwCursor<'txn>
 where
     KQ: AsRef<[u8]>,
 {
@@ -624,65 +676,62 @@ where
     type ReturnedKey = &'txn [u8];
     type ReturnedValue = &'txn [u8];
 
-    fn get(&'cursor self) -> Result<Option<(Self::ReturnedKey, Self::ReturnedValue)>, Self::Error>
+    fn get(&self) -> Result<Option<(Self::ReturnedKey, Self::ReturnedValue)>, Self::Error>
     where
-        Self: 'cursor,
+        Self: 'txn,
     {
         lmdb_cursor_result_to_kv_pair(self.cursor.get(None, None, lmdb_sys::MDB_GET_CURRENT))
     }
 
     fn move_to_first(
-        &'cursor mut self,
+        &mut self,
     ) -> Result<Option<(Self::ReturnedKey, Self::ReturnedValue)>, Self::Error>
     where
-        Self: 'cursor,
+        Self: 'txn,
     {
         lmdb_cursor_result_to_kv_pair(self.cursor.get(None, None, lmdb_sys::MDB_FIRST))
     }
 
     fn move_to_last(
-        &'cursor mut self,
+        &mut self,
     ) -> Result<Option<(Self::ReturnedKey, Self::ReturnedValue)>, Self::Error>
     where
-        Self: 'cursor,
+        Self: 'txn,
     {
         lmdb_cursor_result_to_kv_pair(self.cursor.get(None, None, lmdb_sys::MDB_LAST))
     }
 
     fn move_to_next(
-        &'cursor mut self,
+        &mut self,
     ) -> Result<Option<(Self::ReturnedKey, Self::ReturnedValue)>, Self::Error>
     where
-        Self: 'cursor,
+        Self: 'txn,
     {
         lmdb_cursor_result_to_kv_pair(self.cursor.get(None, None, lmdb_sys::MDB_NEXT))
     }
 
     fn move_to_prev(
-        &'cursor mut self,
+        &mut self,
     ) -> Result<Option<(Self::ReturnedKey, Self::ReturnedValue)>, Self::Error>
     where
-        Self: 'cursor,
+        Self: 'txn,
     {
         lmdb_cursor_result_to_kv_pair(self.cursor.get(None, None, lmdb_sys::MDB_PREV))
     }
 
-    fn move_to_key(
-        &'cursor mut self,
-        key: &'kq KQ,
-    ) -> Result<Option<Self::ReturnedValue>, Self::Error>
+    fn move_to_key(&mut self, key: &'kq KQ) -> Result<Option<Self::ReturnedValue>, Self::Error>
     where
-        Self: 'cursor,
+        Self: 'txn,
     {
         lmdb_cursor_result_to_value(self.cursor.get(Some(key.as_ref()), None, lmdb_sys::MDB_SET))
     }
 
     fn move_to_key_and_get_key(
-        &'cursor mut self,
+        &mut self,
         key: &'kq KQ,
     ) -> Result<Option<(Self::ReturnedKey, Self::ReturnedValue)>, Self::Error>
     where
-        Self: 'cursor,
+        Self: 'txn,
     {
         lmdb_cursor_result_to_kv_pair(self.cursor.get(
             Some(key.as_ref()),
@@ -692,11 +741,11 @@ where
     }
 
     fn move_to_key_or_after(
-        &'cursor mut self,
+        &mut self,
         key: &'kq KQ,
     ) -> Result<Option<(Self::ReturnedKey, Self::ReturnedValue)>, Self::Error>
     where
-        Self: 'cursor,
+        Self: 'txn,
     {
         lmdb_cursor_result_to_kv_pair(self.cursor.get(
             Some(key.as_ref()),
@@ -706,18 +755,28 @@ where
     }
 }
 
-impl<'txn, 'cursor, 'kq, 'kp, 'vp, KQ, KP, VP>
-    crate::WriteCursor<'cursor, &'kq KQ, &'kp KP, &'vp VP> for RwCursor<'txn>
+impl<'env, 'txn, 'kq, 'kp, 'vp, KQ, KP, VP>
+    crate::ReadWriteCursor<'txn, RwTransaction<'env>, &'kq KQ, &'kp KP, &'vp VP> for RwCursor<'txn>
 where
     KQ: 'kq + AsRef<[u8]>,
     KP: 'kp + AsRef<[u8]>,
     VP: 'vp + AsRef<[u8]>,
 {
-    fn put(&'cursor mut self, value: &'vp VP) -> Result<bool, Self::Error>
+    fn open(
+        txn: &'txn mut RwTransaction<'env>,
+        db: <RwTransaction<'env> as crate::Transaction<'env, &'kq KQ>>::Database,
+    ) -> Result<Self, Self::Error>
     where
-        Self: 'cursor,
+        RwTransaction<'env>: 'txn,
+        Self: 'txn,
     {
-        let key = <Self as crate::Cursor<&'kq KQ>>::get(self)?;
+        Ok(Self {
+            cursor: txn.txn.open_rw_cursor(db)?,
+        })
+    }
+
+    fn put(&mut self, value: &'vp VP) -> Result<bool, Self::Error> {
+        let key = <Self as crate::Cursor<'txn, &'kq KQ>>::get(self)?;
         if let Some((key, _)) = key {
             self.cursor
                 .put(&key, value, lmdb::WriteFlags::CURRENT)
@@ -728,27 +787,17 @@ where
         }
     }
 
-    fn put_and_move_to_key(
-        &'cursor mut self,
-        key: &'kp KP,
-        value: &'vp VP,
-    ) -> Result<(), Self::Error>
-    where
-        Self: 'cursor,
-    {
+    fn put_and_move_to_key(&mut self, key: &'kp KP, value: &'vp VP) -> Result<(), Self::Error> {
         self.cursor
             .put(key, value, lmdb::WriteFlags::empty())
             .map_err(Into::into)
     }
 
     fn put_no_overwrite_and_move_to_key(
-        &'cursor mut self,
+        &mut self,
         key: &'kp KP,
         value: &'vp VP,
-    ) -> Result<bool, Self::Error>
-    where
-        Self: 'cursor,
-    {
+    ) -> Result<bool, Self::Error> {
         let lmdb_result = self.cursor.put(key, value, lmdb::WriteFlags::NO_OVERWRITE);
         if lmdb_result == Err(lmdb::Error::KeyExist) {
             Ok(false)
@@ -757,10 +806,7 @@ where
         }
     }
 
-    fn del(&'cursor mut self) -> Result<bool, Self::Error>
-    where
-        Self: 'cursor,
-    {
+    fn del(&mut self) -> Result<bool, Self::Error> {
         let lmdb_result = self.cursor.del(lmdb::WriteFlags::empty());
         if lmdb_result == Err(lmdb::Error::NotFound) {
             Ok(false)
