@@ -12,95 +12,14 @@
 //! [lmdb]: http://symas.com/mdb/
 
 pub mod iter;
-#[cfg(feature = "lmdb-impl")]
+#[cfg(feature = "lmdb_impl")]
 pub mod lmdb;
 
-/// Main trait for the storage API.
+/// Supertrait for [`Environment`][Environment] containing functionality that is
+/// independent of any lifetime or type parameters.
 ///
-/// # Parameters
-/// - `'env`: Lifetime for environment references.
-/// - `'txn`: Lifetime for root transaction references.
-/// - `EC`: Configuration data that can be provided to initialize an
-///   environment.
-/// - `DI`: Unique ID associated with each database in the environment.
-/// - `DC`: Configuration data that can be provided to initialize an individual
-///   database.
-/// - `SC`: Configuration data that can be provided when calling [`sync`][sync]
-///   to flush buffered data. This controls how the flush is performed.
-/// - `KQ`: Key type that can be used to query a database's key-value store.
-/// - `KP`: Key type that can be used to insert an entry into the database. May
-///   or may not be the same as `KQ`.
-/// - `VP`: Value type that can be used to insert an entry into the database.
-///
-/// [sync]: self::Environment::sync
-pub trait StorageInterface<'env, 'txn, EC, DI, DC, SC, KQ, KP, VP>:
-    Environment<EC, DI, DC, SC>
-{
-    /// Read-only transaction type that can be opened from the environment.
-    type RoTransaction: Transaction<
-            'txn,
-            KQ,
-            Error = Self::Error,
-            Database = Self::Database,
-            ReturnedDbConfig = Self::ReturnedDbConfig,
-        > + RootTransaction<'env, 'txn, Self, EC, DI, DC, SC, KQ>;
-
-    /// Read-write transaction type that can be opened from the environment.
-    type RwTransaction: Transaction<
-            'txn,
-            KQ,
-            Error = Self::Error,
-            Database = Self::Database,
-            ReturnedDbConfig = Self::ReturnedDbConfig,
-        > + ReadWriteTransaction<'txn, KQ, KP, VP>
-        + RootTransaction<'env, 'txn, Self, EC, DI, DC, SC, KQ>;
-
-    /// Read-only cursor type that can be opened from a read-only transaction.
-    type RoTxnRoCursor: Cursor<'txn, KQ, Error = Self::Error>
-        + ReadOnlyCursor<'txn, Self::RoTransaction, KQ>;
-
-    /// Read-only cursor type that can be opened from a read-write transaction.
-    type RwTxnRoCursor: Cursor<'txn, KQ, Error = Self::Error>
-        + ReadOnlyCursor<'txn, Self::RwTransaction, KQ>;
-
-    /// Read-write cursor type that can be opened from a read-write transaction.
-    type RwTxnRwCursor: Cursor<'txn, KQ, Error = Self::Error>
-        + ReadWriteCursor<'txn, Self::RwTransaction, KQ, KP, VP>;
-
-    // Note: This trait doesn't require support for cursor iterators or nestable
-    // transactions. The main reason for this is that I couldn't come up with a
-    // workable way of expressing these requirements without generic associated
-    // types.
-}
-
-/// Trait for handles to storage environments. A storage environment is
-/// essentially a type of session that can interact with a set of databases.
-/// Each database contains a key-value store.
-///
-/// # Transaction semantics
-/// Transactions are tied to a specific environment, but not to a specific
-/// database within that environment. The environment must give each
-/// transaction a consistent view of its entire collection of databases.
-///
-/// Read-only transactions must never be blocked by other transactions, and must
-/// never block other transactions. Any active read-write transaction must cause
-/// creation of other read-write transactions to block, so that there is at most
-/// one active read-write transaction in the environment at any time.
-/// (Exception: Read-write transactions may recursively create nested read-write
-/// transactions. See the [`NestedTransaction`][NestedTransaction] trait.)
-///
-/// # Parameters
-/// - `EC`: Configuration data that can be provided to initialize an
-///   environment.
-/// - `DI`: Unique ID associated with each database in the environment.
-/// - `DC`: Configuration data that can be provided to initialize an individual
-///   database.
-/// - `SC`: Configuration data that can be provided when calling [`sync`][sync]
-///   to flush buffered data. This controls how the flush is performed.
-///
-/// [NestedTransaction]: self::NestedTransaction
-/// [sync]: self::Environment::sync
-pub trait Environment<EC, DI, DC, SC>: Sized {
+/// [Environment]: self::Environment
+pub trait EnvironmentBasic {
     /// Error that may occur when operating on the storage environment.
     type Error;
 
@@ -110,14 +29,61 @@ pub trait Environment<EC, DI, DC, SC>: Sized {
     /// Handle that the environment provides for referencing a database after it
     /// has been opened.
     type Database;
+}
 
+/// Main trait for storage environment handles. A storage environment is
+/// essentially a type of session that can interact with a set of databases.
+/// Each database contains a key-value store.
+///
+/// # Transaction semantics
+/// Transactions are tied to a specific environment, but not to a specific
+/// database within that environment. The environment must give each
+/// transaction a consistent view of its entire collection of databases.
+///
+/// Read-only transactions must never be blocked by other transactions, and must
+/// never block other transactions. However, any active read-write transaction
+/// must cause creation of other read-write transactions to block, so that there
+/// is at most one active read-write transaction in the environment at any time.
+/// (Exception: Read-write transactions may create nested read-write
+/// transactions. Each read-write transaction may have at most one directly
+/// nested child transaction at a time, though multiple indirect children are
+/// possible through recursive nesting.)
+///
+/// # Parameters
+/// - `'env`: Lifetime for environment references.
+/// - `EC`: Configuration data that can be provided to initialize an
+///   environment.
+/// - `DI`: Unique ID associated with each database in the environment.
+/// - `DC`: Configuration data that can be provided to initialize an individual
+///   database.
+/// - `SC`: Configuration data that can be provided when calling [`sync`][sync]
+///   to flush buffered data. This controls how the flush is performed.
+/// - `KQ`: Key type that can be used to query a database's key-value store.
+/// - `KP`: Key type that can be used to insert an entry into a database. May or
+///   may not be the same as `KQ`.
+/// - `VP`: Value type that can be used to insert an entry into a database.
+///
+/// [sync]: self::Environment::sync
+pub trait Environment<'env, EC, DI, DC, SC, KQ, KP, VP>: Sized + EnvironmentBasic {
     /// Configuration information that can be obtained for an individual
     /// database. May or may not be the same type as `DC`.
     type ReturnedDbConfig;
 
+    /// Read-only transaction type that can be opened from the environment.
+    type RoTransaction: 'env
+        + TransactionBasic<Error = Self::Error, Database = Self::Database>
+        + for<'txn> Transaction<'txn, KQ>;
+
+    /// Read-write transaction type that can be opened from the environment.
+    type RwTransaction: 'env
+        + TransactionBasic<Error = Self::Error, Database = Self::Database>
+        + for<'txn> ReadWriteTransaction<'txn, KQ, KP, VP>;
+
     /// Initializes an environment. To close the environment, simply drop the
     /// returned environment object.
-    fn new(config: EC) -> Result<Self, Self::Error>;
+    fn new(config: EC) -> Result<Self, Self::Error>
+    where
+        Self: 'env;
 
     /// Opens a database with the specified database ID. Always fails if the
     /// database does not already exist.
@@ -125,10 +91,12 @@ pub trait Environment<EC, DI, DC, SC>: Sized {
     /// The returned database handle can be used by multiple transactions
     /// concurrently.
     ///
-    /// Implementations may return an error in certain contexts if there are
-    /// active transactions. Therefore, it is recommended to get handles to all
-    /// required databases before starting any transactions.
-    fn open_db(&self, id: DI) -> Result<Self::Database, Self::Error>;
+    /// Implementations may return an error if there are active transactions.
+    /// Therefore, it is recommended to get handles to all required databases
+    /// before starting any transactions.
+    fn open_db(&'env mut self, id: DI) -> Result<Self::Database, Self::Error>
+    where
+        Self: 'env;
 
     /// Creates and opens a database with the specified database ID and
     /// configuration. If the database already exists, its configuration may be
@@ -138,20 +106,52 @@ pub trait Environment<EC, DI, DC, SC>: Sized {
     /// The returned database handle can be used by multiple transactions
     /// concurrently.
     ///
-    /// Implementations may return an error in certain contexts if there are
-    /// active transactions. Therefore, it is recommended to get handles to all
-    /// required databases before starting any transactions.
-    fn create_db(&self, id: DI, config: DC) -> Result<Self::Database, Self::Error>;
+    /// Implementations may return an error if there are active transactions.
+    /// Therefore, it is recommended to get handles to all required databases
+    /// before starting any transactions.
+    fn create_db(&'env mut self, id: DI, config: DC) -> Result<Self::Database, Self::Error>
+    where
+        Self: 'env;
 
     /// Gets the configuration of the specified open database.
-    fn db_config(&self, db: Self::Database) -> Result<Self::ReturnedDbConfig, Self::Error>;
+    fn db_config(&'env self, db: Self::Database) -> Result<Self::ReturnedDbConfig, Self::Error>
+    where
+        Self: 'env;
 
     /// Flushes any buffered data owned by the environment, typically to disk.
     /// Implementations that don't have buffering can make this a no-op.
-    fn sync(&self, config: SC) -> Result<(), Self::Error>;
+    fn sync(&'env self, config: SC) -> Result<(), Self::Error>
+    where
+        Self: 'env;
 
     /// Gets statistics about the environment.
-    fn stat(&self) -> Result<Self::Stat, Self::Error>;
+    fn stat(&'env self) -> Result<Self::Stat, Self::Error>
+    where
+        Self: 'env;
+
+    /// Starts a new read-only transaction in the environment.
+    fn begin_ro_txn(&'env self) -> Result<Self::RoTransaction, Self::Error>
+    where
+        Self: 'env;
+
+    /// Starts a new read-write transaction in the environment. If there is
+    /// already an active read-write transaction in the environment, this
+    /// function must block until there is none.
+    fn begin_rw_txn(&'env self) -> Result<Self::RwTransaction, Self::Error>
+    where
+        Self: 'env;
+}
+
+/// Supertrait for [`Transaction`][Transaction] containing functionality that is
+/// independent of any lifetime or type parameters.
+///
+/// [Transaction]: self::Transaction
+pub trait TransactionBasic {
+    /// Error that may occur when operating on the transaction.
+    type Error;
+
+    /// Handle to an open database.
+    type Database;
 }
 
 /// Trait for transaction handles.
@@ -169,13 +169,7 @@ pub trait Environment<EC, DI, DC, SC>: Sized {
 /// - `KQ`: Key type that can be used to query a database's key-value store.
 ///
 /// [Clone]: std::clone::Clone
-pub trait Transaction<'txn, KQ>: Sized {
-    /// Error that may occur when operating on the transaction.
-    type Error;
-
-    /// Handle to an open database.
-    type Database;
-
+pub trait Transaction<'txn, KQ>: Sized + TransactionBasic {
     /// Configuration information that can be obtained for an individual
     /// database.
     type ReturnedDbConfig;
@@ -183,8 +177,11 @@ pub trait Transaction<'txn, KQ>: Sized {
     /// Value object type returned from lookup operations.
     type ReturnedValue;
 
+    /// Read-only cursor that can be opened within the transaction.
+    type RoCursor: 'txn + CursorBasic<Error = Self::Error> + for<'cursor> Cursor<'cursor, KQ>;
+
     /// Commits the transaction, making any data writes that it performed
-    /// visible to future transactions.
+    /// potentially visible to future transactions.
     fn commit(self) -> Result<(), Self::Error>
     where
         Self: 'txn;
@@ -202,13 +199,13 @@ pub trait Transaction<'txn, KQ>: Sized {
     /// Gets the stored value for the specified key in the specified database.
     ///
     /// Returns [`Ok`][Ok]`(`[`None`][None]`)` if the specified key is not
-    /// present (assuming no other error occurs).
+    /// present (assuming no error occurs).
     ///
     /// [Ok]: std::result::Result::Ok
     /// [None]: std::option::Option::None
     fn get(
         &'txn self,
-        db: Self::Database,
+        db: &Self::Database,
         key: KQ,
     ) -> Result<Option<Self::ReturnedValue>, Self::Error>
     where
@@ -216,6 +213,11 @@ pub trait Transaction<'txn, KQ>: Sized {
 
     /// Gets the configuration of the specified open database.
     fn db_config(&'txn self, db: Self::Database) -> Result<Self::ReturnedDbConfig, Self::Error>
+    where
+        Self: 'txn;
+
+    /// Opens a new read-only cursor inside the transaction.
+    fn open_ro_cursor(&'txn self, db: &Self::Database) -> Result<Self::RoCursor, Self::Error>
     where
         Self: 'txn;
 }
@@ -229,10 +231,22 @@ pub trait Transaction<'txn, KQ>: Sized {
 ///   may not be the same as `KQ`.
 /// - `VP`: Value type that can be used to insert an entry into a database.
 pub trait ReadWriteTransaction<'txn, KQ, KP, VP>: Transaction<'txn, KQ> {
+    /// Read-write cursor that can be opened within the transaction.
+    type RwCursor: 'txn
+        + CursorBasic<Error = Self::Error>
+        + for<'cursor> Cursor<'cursor, KQ>
+        + for<'cursor> ReadWriteCursor<'cursor, KQ, KP, VP>;
+
+    /// Child transaction that can be created from the parent read-write
+    /// transaction.
+    type Nested: 'txn
+        + TransactionBasic<Error = Self::Error, Database = Self::Database>
+        + for<'child_txn> ReadWriteTransaction<'child_txn, KQ, KP, VP>;
+
     /// Stores the specified key-value pair in the specified database. If the
     /// database already contains an entry for the specified key, the old entry
     /// will be overwritten.
-    fn put(&'txn mut self, db: Self::Database, key: KP, value: VP) -> Result<(), Self::Error>
+    fn put(&'txn mut self, db: &Self::Database, key: KP, value: VP) -> Result<(), Self::Error>
     where
         Self: 'txn;
 
@@ -260,81 +274,28 @@ pub trait ReadWriteTransaction<'txn, KQ, KP, VP>: Transaction<'txn, KQ> {
     fn clear_db(&'txn mut self, db: Self::Database) -> Result<(), Self::Error>
     where
         Self: 'txn;
-}
 
-/// Trait for transactions that can be opened without a parent transaction.
-///
-/// # Parameters
-/// - `'env`: Lifetime of the environment reference used to construct a
-///   transaction.
-/// - `'txn`: Lifetime for transaction references.
-/// - `E`: Environment in which the transaction can be opened.
-/// - `EC`: Configuration data that can be provided to initialize an
-///   environment.
-/// - `DI`: Unique ID associated with each database in the environment.
-/// - `DC`: Configuration data that can be provided to initialize an individual
-///   database.
-/// - `SC`: Configuration data that can be provided when calling [`sync`][sync]
-///   to flush buffered data.
-/// - `KQ`: Key type that can be used to query a database's key-value store.
-///
-/// [sync]: self::Environment::sync
-pub trait RootTransaction<'env, 'txn, E, EC, DI, DC, SC, KQ>: Transaction<'txn, KQ>
-where
-    E: Environment<EC, DI, DC, SC>,
-{
-    /// Starts a new transaction in the specified environment. If creating a
-    /// read-write transaction, this function must block until the environment
-    /// has no other active read-write transaction.
-    fn open(env: &'env E) -> Result<Self, E::Error>
+    /// Opens a new read-write cursor inside the transaction.
+    fn open_rw_cursor(&'txn mut self, db: &Self::Database) -> Result<Self::RwCursor, Self::Error>
     where
-        Self: 'env,
-        'env: 'txn;
-}
+        Self: 'txn;
 
-/// Trait for transaction handles that can be nested inside other transactions.
-///
-/// A parent transaction can have at most one direct child transaction at a time
-/// (though multiple levels of nesting are allowed), and a parent transaction
-/// cannot be directly accessed while it has an active child.
-///
-/// # Parameters
-/// - `'parent`: Lifetime of the parent transaction reference used to construct
-///   the child transaction.
-/// - `'txn`: Lifetime for child transaction references.
-/// - `P`: Parent transaction type.
-/// - `EC`: Configuration data that can be provided to initialize an
-///   environment.
-/// - `DI`: Unique ID associated with each database in the environment.
-/// - `DC`: Configuration data that can be provided to initialize an individual
-///   database.
-/// - `SC`: Configuration data that can be provided when calling [`sync`][sync]
-///   to flush buffered data.
-/// - `KQ`: Key type that can be used to query a database's key-value store.
-///
-/// [sync]: self::Environment::sync
-pub trait NestedTransaction<'parent, 'txn, P, KQ>: Transaction<'txn, KQ>
-where
-    P: Transaction<'parent, KQ>,
-{
-    /// Begins a child transaction nested inside the specified parent
-    /// transaction.
+    /// Begins a child transaction nested inside the transaction referenced by
+    /// `self`.
     ///
-    /// If the child transaction gets aborted, any database changes it performed
-    /// should be invisible to the parent transaction (and all other
-    /// transactions) both during and after the child transaction's lifetime.
-    /// If the child transaction gets committed, its changes should become
-    /// immediately visible to the parent transaction, but should *not* be
-    /// visible to any other transactions until the parent transaction is
-    /// committed.
-    fn nest(parent: &'parent mut P) -> Result<Self, Self::Error>
+    /// Implementations should enforce the following restrictions.
+    /// - A parent transaction may have at most one direct child transaction at
+    ///   a time (though multiple indirect children can be created through
+    ///   recursive nesting).
+    /// - A parent transaction cannot be used directly to access databases while
+    ///   it has an active child transaction.
+    fn begin_nested_txn(&'txn mut self) -> Result<Self::Nested, Self::Error>
     where
-        Self: 'parent,
-        'parent: 'txn;
+        Self: 'txn;
 }
 
-/// Trait for types whose objects hold some resource, which would normally be
-/// deleted after the holder object is dropped, but might be able to be reused
+/// Trait for types whose objects hold some resource which would normally be
+/// released after the holder object is dropped, but might be able to be reused
 /// instead in order to save allocation overhead.
 ///
 /// If the active object is dropped without being converted to an inactive form
@@ -376,6 +337,21 @@ pub trait InactiveRenewable<A> {
     fn renew(self) -> Result<A, Self::Error>;
 }
 
+/// Supertrait for [`Cursor`][Cursor] containing functionality that is
+/// independent of any lifetime or type parameters.
+///
+/// [Cursor]: self::Cursor
+pub trait CursorBasic {
+    /// Error that may occur when operating on the cursor.
+    type Error;
+
+    /// Type of key data returned from lookup operations.
+    type ReturnedKey: ?Sized;
+
+    /// Type of value data returned from lookup operations.
+    type ReturnedValue: ?Sized;
+}
+
 /// Trait for database cursor handles. Unlike transactions, each cursor is tied
 /// to a specific database within an environment and can only operate on that
 /// database. This trait defines the common functionality for read-only and
@@ -386,27 +362,22 @@ pub trait InactiveRenewable<A> {
 /// is possible for a cursor to be positioned at a key that doesn't exist in the
 /// database; this typically only happens for cursors that allow deletions.
 ///
-/// Note: The cursor API assumes that entries in the database are sorted by key
-/// using an unambiguous, stable key ordering. It is recommended (but not
-/// required) that key types implement [`Ord`][Ord] and that the ordering used
-/// by the database be compatible with the ordering defined by [`Ord`][Ord].
+/// The cursor API assumes that entries in the database are sorted by key using
+/// an unambiguous, stable key ordering. It is recommended (but not required)
+/// that key types implement [`Ord`][Ord] and that the ordering used by the
+/// database be compatible with the ordering defined by [`Ord`][Ord].
 ///
 /// # Parameters
-/// - `'txn`: Lifetime of the transaction reference used to construct the
-///   cursor.
+/// - `'cursor`: Lifetime for cursor references.
 /// - `KQ`: Key type that can be used to position the cursor at a specific key.
 ///
 /// [Ord]: std::cmp::Ord
-pub trait Cursor<'txn, KQ> {
-    /// Error that may occur when operating on the cursor.
-    type Error;
+pub trait Cursor<'cursor, KQ>: CursorBasic {
+    /// Key object handle type returned from lookup operations.
+    type ReturnedKeyHandle: 'cursor + CursorReturnedDataHandle<'cursor, Self::ReturnedKey>;
 
-    /// Key object type returned from lookup operations. May or may not be the
-    /// same as `KQ`.
-    type ReturnedKey;
-
-    /// Value object type returned from lookup operations.
-    type ReturnedValue;
+    /// Value object handle type returned from lookup operations.
+    type ReturnedValueHandle: 'cursor + CursorReturnedDataHandle<'cursor, Self::ReturnedValue>;
 
     /// Retrieves the key-value pair at the cursor's current position. If the
     /// cursor's position key does not exist in the database, the first entry
@@ -421,9 +392,11 @@ pub trait Cursor<'txn, KQ> {
     ///
     /// [Ok]: std::result::Result::Ok
     /// [None]: std::option::Option::None
-    fn get(&self) -> Result<Option<(Self::ReturnedKey, Self::ReturnedValue)>, Self::Error>
+    fn get(
+        &'cursor self,
+    ) -> Result<Option<(Self::ReturnedKeyHandle, Self::ReturnedValueHandle)>, Self::Error>
     where
-        Self: 'txn;
+        Self: 'cursor;
 
     /// Repositions the cursor to the first key in the database, and retrieves
     /// the corresponding key-value pair.
@@ -435,10 +408,10 @@ pub trait Cursor<'txn, KQ> {
     /// [Ok]: std::result::Result::Ok
     /// [None]: std::option::Option::None
     fn move_to_first(
-        &mut self,
-    ) -> Result<Option<(Self::ReturnedKey, Self::ReturnedValue)>, Self::Error>
+        &'cursor mut self,
+    ) -> Result<Option<(Self::ReturnedKeyHandle, Self::ReturnedValueHandle)>, Self::Error>
     where
-        Self: 'txn;
+        Self: 'cursor;
 
     /// Repositions the cursor to the last key in the database, and retrieves
     /// the corresponding key-value pair.
@@ -450,10 +423,10 @@ pub trait Cursor<'txn, KQ> {
     /// [Ok]: std::result::Result::Ok
     /// [None]: std::option::Option::None
     fn move_to_last(
-        &mut self,
-    ) -> Result<Option<(Self::ReturnedKey, Self::ReturnedValue)>, Self::Error>
+        &'cursor mut self,
+    ) -> Result<Option<(Self::ReturnedKeyHandle, Self::ReturnedValueHandle)>, Self::Error>
     where
-        Self: 'txn;
+        Self: 'cursor;
 
     /// Repositions the cursor to the first key in the database that is greater
     /// than the cursor's current position key, and retrieves the database entry
@@ -470,10 +443,10 @@ pub trait Cursor<'txn, KQ> {
     /// [Ok]: std::result::Result::Ok
     /// [None]: std::option::Option::None
     fn move_to_next(
-        &mut self,
-    ) -> Result<Option<(Self::ReturnedKey, Self::ReturnedValue)>, Self::Error>
+        &'cursor mut self,
+    ) -> Result<Option<(Self::ReturnedKeyHandle, Self::ReturnedValueHandle)>, Self::Error>
     where
-        Self: 'txn;
+        Self: 'cursor;
 
     /// Repositions the cursor to the last key in the database that is less than
     /// the cursor's current position key, and retrieves the database entry
@@ -490,10 +463,10 @@ pub trait Cursor<'txn, KQ> {
     /// [Ok]: std::result::Result::Ok
     /// [None]: std::option::Option::None
     fn move_to_prev(
-        &mut self,
-    ) -> Result<Option<(Self::ReturnedKey, Self::ReturnedValue)>, Self::Error>
+        &'cursor mut self,
+    ) -> Result<Option<(Self::ReturnedKeyHandle, Self::ReturnedValueHandle)>, Self::Error>
     where
-        Self: 'txn;
+        Self: 'cursor;
 
     /// Repositions the cursor to the specified key, and retrieves the value
     /// associated with that key in the database.
@@ -505,9 +478,12 @@ pub trait Cursor<'txn, KQ> {
     ///
     /// [Ok]: std::result::Result::Ok
     /// [None]: std::option::Option::None
-    fn move_to_key(&mut self, key: KQ) -> Result<Option<Self::ReturnedValue>, Self::Error>
+    fn move_to_key(
+        &'cursor mut self,
+        key: KQ,
+    ) -> Result<Option<Self::ReturnedValueHandle>, Self::Error>
     where
-        Self: 'txn;
+        Self: 'cursor;
 
     /// Same as [`move_to_key`][move_to_key], except that after the reposition,
     /// it retrieves the key as well as the value. Retrieving the key is often
@@ -517,11 +493,11 @@ pub trait Cursor<'txn, KQ> {
     ///
     /// [move_to_key]: self::Cursor::move_to_key
     fn move_to_key_and_get_key(
-        &mut self,
+        &'cursor mut self,
         key: KQ,
-    ) -> Result<Option<(Self::ReturnedKey, Self::ReturnedValue)>, Self::Error>
+    ) -> Result<Option<(Self::ReturnedKeyHandle, Self::ReturnedValueHandle)>, Self::Error>
     where
-        Self: 'txn;
+        Self: 'cursor;
 
     /// Repositions the cursor to the first key in the database that is greater
     /// than or equal to the specified key, and retrieves the corresponding
@@ -535,81 +511,28 @@ pub trait Cursor<'txn, KQ> {
     /// [Ok]: std::result::Result::Ok
     /// [None]: std::option::Option::None
     fn move_to_key_or_after(
-        &mut self,
+        &'cursor mut self,
         key: KQ,
-    ) -> Result<Option<(Self::ReturnedKey, Self::ReturnedValue)>, Self::Error>
+    ) -> Result<Option<(Self::ReturnedKeyHandle, Self::ReturnedValueHandle)>, Self::Error>
     where
-        Self: 'txn;
-}
-
-/// Trait for database cursor handles that only allow reading.
-///
-/// # Parameters
-/// - `'txn`: Lifetime of the transaction reference used to construct the
-///   cursor.
-/// - `T`: Transaction in which the cursor can be opened.
-/// - `KQ`: Key type that can be used to position the cursor at a specific key.
-pub trait ReadOnlyCursor<'txn, T, KQ>: Sized + Cursor<'txn, KQ>
-where
-    T: Transaction<'txn, KQ>,
-{
-    /// Opens a new read-only cursor inside the specified transaction.
-    fn open(txn: &'txn T, db: T::Database) -> Result<Self, Self::Error>
-    where
-        T: 'txn,
-        Self: 'txn;
+        Self: 'cursor;
 }
 
 /// Trait for database cursor handles that allow writing.
 ///
 /// # Parameters
-/// - `'txn`: Lifetime of the transaction reference used to construct the
-///   cursor.
-/// - `T`: Transaction in which the cursor can be opened.
+/// - `'cursor`: Lifetime for cursor references.
 /// - `KQ`: Key type that can be used to position the cursor at a specific key.
 /// - `KP`: Key type that can be used to insert an entry into the database. May
 ///   or may not be the same as `KQ`.
 /// - `VP`: Value type that can be used to insert an entry into the database.
-pub trait ReadWriteCursor<'txn, T, KQ, KP, VP>: Sized + Cursor<'txn, KQ>
-where
-    T: Transaction<'txn, KQ>,
-{
-    /// Opens a new read-write cursor inside the specified transaction.
-    fn open(txn: &'txn mut T, db: T::Database) -> Result<Self, Self::Error>
-    where
-        T: 'txn,
-        Self: 'txn;
-
-    /// Overwrites a value in the database based on the cursor's position state,
-    /// without modifying the position state. There are a few possible cases
-    /// that determine the behavior:
-    /// - If the cursor is unpositioned, no write is performed, and
-    ///   [`Ok`][Ok]`(false)` is returned (assuming no error occurs).
-    /// - If the cursor is positioned at a key that exists in the database, the
-    ///   value associated with that key is overwritten. [`Ok`][Ok]`(true)` is
-    ///   returned (assuming no error occurs).
-    /// - If the cursor is positioned at a key that does not exist in the
-    ///   database, and the database contains at least one key that is greater
-    ///   than the cursor's position key, the write occurs at the first such
-    ///   key. In other words, the first key in the database that is greater
-    ///   than the cursor's position key gets its value overwritten.
-    ///   [`Ok`][Ok]`(true)` is returned (assuming no error occurs).
-    /// - If the cursor is positioned at a key that does not exist in the
-    ///   database, and all keys in the database are less than the cursor's
-    ///   position key, no write is performed. [`Ok`][Ok]`(false)` is returned
-    ///   (assuming no error occurs).
-    ///
-    /// [Ok]: std::result::Result::Ok
-    fn put(&mut self, value: VP) -> Result<bool, Self::Error>
-    where
-        Self: 'txn;
-
+pub trait ReadWriteCursor<'cursor, KQ, KP, VP>: Cursor<'cursor, KQ> {
     /// Sets the value of the database entry with the specified key (inserting
     /// the entry if it doesn't already exist), and repositions the cursor to
     /// that key.
-    fn put_and_move_to_key(&mut self, key: KP, value: VP) -> Result<(), Self::Error>
+    fn put_and_move_to_key(&'cursor mut self, key: KP, value: VP) -> Result<(), Self::Error>
     where
-        Self: 'txn;
+        Self: 'cursor;
 
     /// Inserts the specified key-value pair into the database *if* the database
     /// does not already contain an entry for the specified key, and repositions
@@ -621,9 +544,13 @@ where
     /// specified key, but no other error occurred.
     ///
     /// [Ok]: std::result::Result::Ok
-    fn put_no_overwrite_and_move_to_key(&mut self, key: KP, value: VP) -> Result<bool, Self::Error>
+    fn put_no_overwrite_and_move_to_key(
+        &'cursor mut self,
+        key: KP,
+        value: VP,
+    ) -> Result<bool, Self::Error>
     where
-        Self: 'txn;
+        Self: 'cursor;
 
     /// Deletes an entry from the database based on the cursor's position state,
     /// without modifying the position state. There are a few possible cases
@@ -650,68 +577,39 @@ where
     /// exist in the database.
     ///
     /// [Ok]: std::result::Result::Ok
-    fn del(&mut self) -> Result<bool, Self::Error>
+    fn del(&'cursor mut self) -> Result<bool, Self::Error>
     where
-        Self: 'txn;
+        Self: 'cursor;
 }
 
-/// A cursor can be wrapped in an iterator to provide an iteration-based
-/// interface to a database. This trait defines the behavior for such iterators.
-///
-/// If the iterator encounters an unexpected database error during iteration, it
-/// should produce one [`Err`][Err] value containing the error, then stop
-/// producing values.
+/// Trait for key or value data returned by cursor operations.
 ///
 /// # Parameters
-/// - `'txn`: Lifetime of the transaction reference used to construct the
-///   cursor.
-/// - `'cursor`: Lifetime of the cursor reference used to construct the
-///   iterator.
-/// - `C`: Type of wrapped cursor.
-/// - `KQ`: Key type that can be used to position the cursor at a specific key.
+/// - `'cursor`: Lifetime for the cursor reference that was used to retrieve the
+///   data.
+/// - `D`: Type of wrapped data that can be retrieved from the handle.
 ///
-/// [Err]: std::result::Result::Err
-pub trait CursorIterator<'txn, 'cursor, C, KQ>:
-    Sized + Iterator<Item = Result<(C::ReturnedKey, C::ReturnedValue), C::Error>>
-where
-    C: Cursor<'txn, KQ>,
-{
-    /// Wraps the cursor in an iterator that starts iteration from the cursor's
-    /// current position. If the cursor is unpositioned, iteration will start
-    /// with the first key in the database; the iteration will be empty if the
-    /// database is empty (assuming no errors occur). If the cursor has a
-    /// position key, iteration will start with the first key in the database
-    /// that is greater than (*not* equal to) that position key; the iteration
-    /// will be empty if there is no such key (assuming no error occurs).
+/// # Safety
+/// This trait is marked `unsafe` because its [`get`][get] method must uphold a
+/// safety guarantee that can't be easily enforced by Rust's type system.
+///
+/// [get]: self::CursorReturnedDataHandle::get
+pub unsafe trait CursorReturnedDataHandle<'cursor, D: ?Sized> {
+    /// Gets a reference to the wrapped data.
     ///
-    /// This trait does not specify whether or how the cursor's position state
-    /// may be modified by the iterator. If you wish to use a cursor directly
-    /// after it has been wrapped in an iterator, it is recommended to first
-    /// reposition the cursor to a well-defined position.
-    fn iter(cursor: &'cursor mut C) -> Result<Self, C::Error>
-    where
-        Self: 'cursor,
-        C: 'cursor;
-
-    /// Similar to [`iter`][iter], except iteration starts at the first key in
-    /// the database regardless of the cursor's current position. The iteration
-    /// will be empty if the database is empty (assuming no error occurs).
+    /// # Safety
+    /// In addition to being valid for the lifetime `'cursor`, the returned
+    /// pointer must also be valid at least until one of the following happens.
+    /// - The cursor from which this data was retrieved is destroyed.
+    /// - The cursor from which this data was retrieved is used to mutate the
+    ///   database, using one of the methods from
+    ///   [`ReadWriteCursor`][ReadWriteCursor].
     ///
-    /// [iter]: self::CursorIterator::iter
-    fn iter_start(cursor: &'cursor mut C) -> Result<Self, C::Error>
-    where
-        Self: 'cursor,
-        C: 'cursor;
-
-    /// Similar to [`iter`][iter], except iteration starts at the specified key
-    /// regardless of the cursor's current position. More specifically,
-    /// iteration will start with the first key in the database that is greater
-    /// than *or* equal to the specified key. The iteration will be empty if
-    /// there is no such key (assuming no error occurs).
+    /// Note: The main purpose for this extra constraint is to make it possible
+    /// to wrap cursors in an [`Iterator`][Iterator]. This will be unnecessary
+    /// in the future if Rust gets generic associated types.
     ///
-    /// [iter]: self::CursorIterator::iter
-    fn iter_from(cursor: &'cursor mut C, key: KQ) -> Result<Self, C::Error>
-    where
-        Self: 'cursor,
-        C: 'cursor;
+    /// [ReadWriteCursor]: self::ReadWriteCursor
+    /// [Iterator]: std::iter::Iterator
+    fn get(&self) -> &'cursor D;
 }
