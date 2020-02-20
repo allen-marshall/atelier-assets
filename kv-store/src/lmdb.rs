@@ -755,3 +755,34 @@ impl<'txn, 'cursor, 'kq, 'kp, 'vp> crate::ReadWriteCursor<'cursor, &'kq [u8], &'
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::{tempdir, TempDir};
+
+    /// Creates a new empty LMDB storage environment in a temporary directory,
+    /// using the specified configuration. The returned handle to the temporary
+    /// directory should be kept alive as long as the environment is in use, as
+    /// dropping it may delete the temporary directory.
+    ///
+    /// # Panics
+    /// Panics if the storage environment returns an unexpected error.
+    fn make_empty_env(env_builder: &lmdb::EnvironmentBuilder) -> (Environment, TempDir) {
+        let temp_dir = tempdir().unwrap();
+        let env =
+            crate::Environment::new(&EnvironmentConfig::new(&env_builder, temp_dir.path(), None))
+                .unwrap();
+        (env, temp_dir)
+    }
+
+    /// Basic test that creates an empty storage environment, writes some data
+    /// to it, then makes sure it can read the data back.
+    #[test]
+    fn basic_test() {
+        let mut env_builder = lmdb::Environment::new();
+        env_builder.set_max_dbs(10);
+        let (mut env, _temp_dir) = make_empty_env(&env_builder);
+        crate::test_util::basic_test(&mut env, lmdb::DatabaseFlags::empty());
+    }
+}

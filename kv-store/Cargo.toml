@@ -21,3 +21,4 @@ lmdb-sys = { git = "http://github.com/kabergstrom/lmdb-rs", optional = true }
 
 [dev-dependencies]
 atelier-kv-store-proc-macros = { path = "./proc-macros" }
+tempfile = "3.1"

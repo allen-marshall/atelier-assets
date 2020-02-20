@@ -614,3 +614,180 @@ pub unsafe trait CursorReturnedDataHandle<'cursor, D: ?Sized> {
     /// [Iterator]: std::iter::Iterator
     fn get(&self) -> &'cursor D;
 }
+
+/// Utilities for testing implementations of the key-value storage API.
+#[cfg(test)]
+pub(crate) mod test_util {
+    use super::*;
+    use atelier_kv_store_proc_macros::require_binary_static_env_inside_crate;
+    use std::collections::BTreeMap;
+    use std::fmt::Debug;
+
+    /// A "snapshot" of an environment, consisting of a mapping from database
+    /// handles to key-value stores.
+    ///
+    /// # Parameters
+    /// - `DB`: Type that represents a database.
+    pub(crate) type EnvSnapshot<DB> = BTreeMap<DB, BTreeMap<Vec<u8>, Vec<u8>>>;
+
+    /// Converts an environment snapshot with databases represented by database
+    /// name strings into an equivalent snapshot with databases represented by
+    /// active database handles. The databases mentioned in the snapshot are
+    /// created in the storage environment using the specified database
+    /// configuration.
+    ///
+    /// # Parameters
+    /// - `E`: Storage environment type.
+    /// - `EC`: Environment configuration type.
+    /// - `DC`: Database configuration type.
+    /// - `SC`: Environment sync configuration type.
+    ///
+    /// # Panics
+    /// Panics if the storage environment returns an unexpected error.
+    #[require_binary_static_env_inside_crate(E, EC, DC, SC)]
+    pub(crate) fn create_dbs_for_snapshot<E, EC, DC, SC>(
+        env: &mut E,
+        snapshot: EnvSnapshot<Option<&str>>,
+        db_cfg: DC,
+    ) -> EnvSnapshot<E::Database>
+    where
+        DC: Clone,
+        E::Error: Debug,
+        E::Database: Ord,
+    {
+        let mut output = BTreeMap::new();
+        for (db_id, db_contents) in snapshot.into_iter() {
+            let db_handle = env.create_db(db_id, db_cfg.clone()).unwrap();
+            output.insert(db_handle, db_contents);
+        }
+        output
+    }
+
+    /// Tests that the specified environment contains all the key-value pairs
+    /// mentioned in the given snapshot, and no other key-value pairs.
+    ///
+    /// # Parameters
+    /// - `E`: Storage environment type.
+    /// - `EC`: Environment configuration type.
+    /// - `DC`: Database configuration type.
+    /// - `SC`: Environment sync configuration type.
+    ///
+    /// # Panics
+    /// Panics if the storage environment returns an unexpected error, or if the
+    /// environment contents do not match the snapshot.
+    #[require_binary_static_env_inside_crate(E, EC, DC, SC)]
+    pub(crate) fn test_db_contents_equal<E, EC, DC, SC>(
+        env: &E,
+        expected: &EnvSnapshot<E::Database>,
+    ) where
+        E::Error: Debug,
+        E::Database: Ord,
+    {
+        // Test that we can retrieve the expected contents through a read-only transaction.
+        let ro_txn = env.begin_ro_txn().unwrap();
+        for (db, expected_db_contents) in expected.iter() {
+            for (key, value) in expected_db_contents {
+                assert_eq!(ro_txn.get(db, key).unwrap().unwrap().as_ref(), &**value);
+            }
+        }
+        ro_txn.abort();
+
+        // Test that we can retrieve the expected contents through a read-write transaction.
+        let rw_txn = env.begin_rw_txn().unwrap();
+        for (db, expected_db_contents) in expected.iter() {
+            for (key, value) in expected_db_contents {
+                assert_eq!(rw_txn.get(db, key).unwrap().unwrap().as_ref(), &**value);
+            }
+        }
+        rw_txn.abort();
+
+        // TODO: Also test using cursors. Currently, we aren't verifying that
+        //  there is no extra data.
+    }
+
+    /// Inserts all the key-value pairs from the specified snapshot into the
+    /// given storage environment.
+    ///
+    /// # Parameters
+    /// - `E`: Storage environment type.
+    /// - `EC`: Environment configuration type.
+    /// - `DC`: Database configuration type.
+    /// - `SC`: Environment sync configuration type.
+    ///
+    /// # Panics
+    /// Panics if the storage environment returns an unexpected error.
+    #[require_binary_static_env_inside_crate(E, EC, DC, SC)]
+    pub(crate) fn add_db_contents<E, EC, DC, SC>(
+        env: &mut E,
+        contents_to_add: &EnvSnapshot<E::Database>,
+    ) where
+        E::Error: Debug,
+        E::Database: Ord,
+    {
+        let mut rw_txn = env.begin_rw_txn().unwrap();
+        for (db, db_contents_to_add) in contents_to_add.iter() {
+            for (key, value) in db_contents_to_add {
+                rw_txn
+                    .put(db, AsRef::<[u8]>::as_ref(key), AsRef::<[u8]>::as_ref(value))
+                    .unwrap();
+            }
+        }
+        rw_txn.commit().unwrap()
+    }
+
+    /// A simple test that writes some data into an initially empty storage
+    /// environment, then reads the data back and checks that it matches what
+    /// was written.
+    ///
+    /// # Parameters
+    /// - `E`: Storage environment type.
+    /// - `EC`: Environment configuration type.
+    /// - `DC`: Database configuration type.
+    /// - `SC`: Environment sync configuration type.
+    ///
+    /// # Panics
+    /// Panics if the storage environment returns an unexpected error, or if
+    /// reading the database after the data insertions does not yield the
+    /// expected results.
+    #[require_binary_static_env_inside_crate(E, EC, DC, SC)]
+    pub(crate) fn basic_test<E, EC, DC, SC>(env: &mut E, db_cfg: DC)
+    where
+        DC: Clone,
+        E::Error: Debug,
+        E::Database: Ord,
+    {
+        // Make some test data.
+        let mut contents = BTreeMap::new();
+        contents.insert(None, BTreeMap::new());
+        contents.insert(Some("db0"), BTreeMap::new());
+        contents.insert(Some("db1"), BTreeMap::new());
+        contents
+            .get_mut(&None)
+            .unwrap()
+            .insert(b"Respond with space.".to_vec(), b" ".to_vec());
+        contents
+            .get_mut(&None)
+            .unwrap()
+            .insert(b"Is this the default database?".to_vec(), b"yes".to_vec());
+        contents
+            .get_mut(&None)
+            .unwrap()
+            .insert(b"Is it being used for testing?".to_vec(), b"yes".to_vec());
+        contents
+            .get_mut(&None)
+            .unwrap()
+            .insert(b"What is stored in it?".to_vec(), b"data".to_vec());
+        contents
+            .get_mut(&Some("db0"))
+            .unwrap()
+            .insert(b" ".to_vec(), b"Space".to_vec());
+        contents
+            .get_mut(&Some("db0"))
+            .unwrap()
+            .insert(b"2 + 2".to_vec(), b"4".to_vec());
+
+        let contents = create_dbs_for_snapshot(env, contents, db_cfg);
+        add_db_contents(env, &contents);
+        test_db_contents_equal(env, &contents);
+    }
+}
