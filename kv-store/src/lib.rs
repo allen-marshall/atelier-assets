@@ -14,6 +14,7 @@
 pub mod iter;
 #[cfg(feature = "lmdb_impl")]
 pub mod lmdb;
+pub mod lt_trait_wrappers;
 
 /// Supertrait for [`Environment`][Environment] containing functionality that is
 /// independent of any lifetime or type parameters.
