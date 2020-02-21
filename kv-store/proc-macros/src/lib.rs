@@ -86,3 +86,96 @@ fn remove_ident_name_conflicts(names: &mut Vec<String>, forbidden: &HashSet<Stri
         next_forbidden.insert(name.clone());
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::iter::{FromIterator, IntoIterator};
+
+    /// Simple utility that converts a collection of `ToString` objects into a
+    /// collection of `String` objects.
+    fn map_to_string<C0, C1>(collection: C0) -> C1
+    where
+        C0: IntoIterator,
+        C0::Item: ToString,
+        C1: FromIterator<String>,
+    {
+        collection.into_iter().map(|s| s.to_string()).collect()
+    }
+
+    /// Helper that executes a single test case for the
+    /// `remove_ident_name_conflicts` function. The arguments provide an initial
+    /// names vector to modify, a set of forbidden identifier names, and the
+    /// expected contents of the names vector after the modification.
+    fn remove_ident_name_conflicts_case(
+        names: &mut Vec<String>,
+        forbidden: &HashSet<String>,
+        expected: &Vec<String>,
+    ) {
+        remove_ident_name_conflicts(names, forbidden);
+
+        // Ensure that there are no conflicts.
+        let output_names_set: HashSet<String> = names.clone().into_iter().collect();
+        assert_eq!(names.len(), output_names_set.len());
+        assert!(output_names_set.is_disjoint(forbidden));
+
+        // Ensure that the names are as expected.
+        assert_eq!(&names, &expected);
+    }
+
+    /// Tests the `remove_ident_name_conflicts` function.
+    #[test]
+    fn remove_ident_name_conflicts_test() {
+        remove_ident_name_conflicts_case(
+            &mut map_to_string(vec!["aa", "bb", "cc"]),
+            &HashSet::new(),
+            &map_to_string(vec!["aa", "bb", "cc"]),
+        );
+        remove_ident_name_conflicts_case(
+            &mut map_to_string(vec!["aa", "bb", "cc"]),
+            &map_to_string(vec!["dd", "ee", "ff"]),
+            &map_to_string(vec!["aa", "bb", "cc"]),
+        );
+        remove_ident_name_conflicts_case(
+            &mut map_to_string(vec!["aa", "bb", "cc"]),
+            &map_to_string(vec!["aa"]),
+            &map_to_string(vec!["aa_0", "bb", "cc"]),
+        );
+        remove_ident_name_conflicts_case(
+            &mut map_to_string(vec!["aa", "bb", "cc"]),
+            &map_to_string(vec!["aa", "aa_0", "aa_1"]),
+            &map_to_string(vec!["aa_2", "bb", "cc"]),
+        );
+        remove_ident_name_conflicts_case(
+            &mut map_to_string(vec!["aa", "bb", "cc"]),
+            &map_to_string(vec!["aa", "aa_0", "bb"]),
+            &map_to_string(vec!["aa_1", "bb_0", "cc"]),
+        );
+        remove_ident_name_conflicts_case(
+            &mut map_to_string(vec!["aa", "bb", "cc"]),
+            &map_to_string(vec!["bb", "ee", "ff"]),
+            &map_to_string(vec!["aa", "bb_0", "cc"]),
+        );
+        remove_ident_name_conflicts_case(
+            &mut map_to_string(vec!["aa", "aa", "cc"]),
+            &HashSet::new(),
+            &map_to_string(vec!["aa", "aa_0", "cc"]),
+        );
+        remove_ident_name_conflicts_case(
+            &mut map_to_string(vec!["aa", "aa", "cc"]),
+            &map_to_string(vec!["aa"]),
+            &map_to_string(vec!["aa_0", "aa_1", "cc"]),
+        );
+        remove_ident_name_conflicts_case(
+            &mut map_to_string(vec!["aa", "aa_0", "cc"]),
+            &map_to_string(vec!["aa"]),
+            &map_to_string(vec!["aa_0", "aa_0_0", "cc"]),
+        );
+        remove_ident_name_conflicts_case(&mut Vec::new(), &HashSet::new(), &Vec::new());
+        remove_ident_name_conflicts_case(
+            &mut Vec::new(),
+            &map_to_string(vec!["aa", "bb", "cc"]),
+            &Vec::new(),
+        );
+    }
+}
