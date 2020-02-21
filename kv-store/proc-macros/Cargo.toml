@@ -13,3 +13,6 @@ proc-macro = true
 syn = { version = "1.0", features = ["full", "parsing", "printing", "clone-impls", "extra-traits", "proc-macro", "visit"] }
 quote = "1.0"
 proc-macro2 = "1.0"
+
+[dev-dependencies]
+atelier-kv-store = { path = ".." }

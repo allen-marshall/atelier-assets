@@ -7,11 +7,40 @@ use std::collections::HashSet;
 
 pub(crate) mod binary_static_env;
 
-// TODO: Document the required arguments and maybe give an example.
 /// Adds trait bounds to a `where` clause in order to constrain a type to be
 /// usable as a `'static` key-value storage environment where the keys and
 /// values are byte strings, i.e. an LMDB-like storage environment. This macro
 /// exists because the required trait bounds are quite long and repetitive.
+///
+/// This macro attribute expects four comma-separated arguments representing the
+/// following:
+/// - Main storage environment type
+/// - Configuration type used to initialize a storage environment
+/// - Configuration type used to initialize a database within a storage
+///   environment
+/// - Configuration type passed to environment sync/flush operations
+///
+/// Usage example:
+///
+/// ```
+/// use atelier_kv_store::{ReadWriteTransaction, Transaction};
+/// use atelier_kv_store_proc_macros::require_binary_static_env;
+/// use std::fmt::Debug;
+///
+/// #[require_binary_static_env(E, EC, DC, SC)]
+/// fn do_something<E, EC, DC, SC>(env: &mut E, db_cfg: DC)
+///     where
+///         E::Error: Debug,
+/// {
+///     // Here you can manipulate the storage environment using the API defined
+///     // in the atelier_kv_store crate, because the macro has added the
+///     // required trait bounds to the function's where clause.
+///     let db = env.create_db(Some("db_name"), db_cfg).unwrap();
+///     let mut rw_txn = env.begin_rw_txn().unwrap();
+///     rw_txn.put(&db, b"new_key", b"new_value").unwrap();
+///     rw_txn.commit().unwrap();
+/// }
+/// ```
 #[proc_macro_attribute]
 pub fn require_binary_static_env(
     attr: proc_macro::TokenStream,
