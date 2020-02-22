@@ -225,7 +225,7 @@ impl<'cfg, 'envb, 'path, 'env, 'dbid, 'kq, 'kp, 'vp>
         }
     }
 
-    fn db_config(&'env self, db: Self::Database) -> Result<Self::ReturnedDbConfig, Self::Error>
+    fn db_config(&'env self, db: &Self::Database) -> Result<Self::ReturnedDbConfig, Self::Error>
     where
         Self: 'env,
     {
@@ -298,7 +298,7 @@ impl<'env, 'txn, 'kq> crate::Transaction<'txn, &'kq [u8]> for RoTransaction<'env
         }
     }
 
-    fn db_config(&'txn self, db: Self::Database) -> Result<Self::ReturnedDbConfig, Self::Error>
+    fn db_config(&'txn self, db: &Self::Database) -> Result<Self::ReturnedDbConfig, Self::Error>
     where
         Self: 'txn,
     {
@@ -371,7 +371,7 @@ impl<'env, 'txn, 'kq> crate::Transaction<'txn, &'kq [u8]> for RwTransaction<'env
         }
     }
 
-    fn db_config(&'txn self, db: Self::Database) -> Result<Self::ReturnedDbConfig, Self::Error>
+    fn db_config(&'txn self, db: &Self::Database) -> Result<Self::ReturnedDbConfig, Self::Error>
     where
         Self: 'txn,
     {
@@ -408,7 +408,7 @@ impl<'env, 'txn, 'kq, 'kp, 'vp> crate::ReadWriteTransaction<'txn, &'kq [u8], &'k
 
     fn put_no_overwrite(
         &'txn mut self,
-        db: Self::Database,
+        db: &Self::Database,
         key: &'kp [u8],
         value: &'vp [u8],
     ) -> Result<bool, Self::Error>
@@ -425,7 +425,7 @@ impl<'env, 'txn, 'kq, 'kp, 'vp> crate::ReadWriteTransaction<'txn, &'kq [u8], &'k
         }
     }
 
-    fn del(&'txn mut self, db: Self::Database, key: &'kq [u8]) -> Result<bool, Self::Error>
+    fn del(&'txn mut self, db: &Self::Database, key: &'kq [u8]) -> Result<bool, Self::Error>
     where
         Self: 'txn,
     {
@@ -437,7 +437,7 @@ impl<'env, 'txn, 'kq, 'kp, 'vp> crate::ReadWriteTransaction<'txn, &'kq [u8], &'k
         }
     }
 
-    fn clear_db(&'txn mut self, db: Self::Database) -> Result<(), Self::Error>
+    fn clear_db(&'txn mut self, db: &Self::Database) -> Result<(), Self::Error>
     where
         Self: 'txn,
     {

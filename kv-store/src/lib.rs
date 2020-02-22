@@ -115,7 +115,7 @@ pub trait Environment<'env, EC, DI, DC, SC, KQ, KP, VP>: Sized + EnvironmentBasi
         Self: 'env;
 
     /// Gets the configuration of the specified open database.
-    fn db_config(&'env self, db: Self::Database) -> Result<Self::ReturnedDbConfig, Self::Error>
+    fn db_config(&'env self, db: &Self::Database) -> Result<Self::ReturnedDbConfig, Self::Error>
     where
         Self: 'env;
 
@@ -213,7 +213,7 @@ pub trait Transaction<'txn, KQ>: Sized + TransactionBasic {
         Self: 'txn;
 
     /// Gets the configuration of the specified open database.
-    fn db_config(&'txn self, db: Self::Database) -> Result<Self::ReturnedDbConfig, Self::Error>
+    fn db_config(&'txn self, db: &Self::Database) -> Result<Self::ReturnedDbConfig, Self::Error>
     where
         Self: 'txn;
 
@@ -257,7 +257,7 @@ pub trait ReadWriteTransaction<'txn, KQ, KP, VP>: Transaction<'txn, KQ> {
     /// already an entry in the database with the specified key.
     fn put_no_overwrite(
         &'txn mut self,
-        db: Self::Database,
+        db: &Self::Database,
         key: KP,
         value: VP,
     ) -> Result<bool, Self::Error>
@@ -267,12 +267,12 @@ pub trait ReadWriteTransaction<'txn, KQ, KP, VP>: Transaction<'txn, KQ> {
     /// Deletes the entry for the specified key from the specified database, if
     /// there is such an entry. On success, returns `true` if a deletion was
     /// performed and `false` if the entry to delete did not exist.
-    fn del(&'txn mut self, db: Self::Database, key: KQ) -> Result<bool, Self::Error>
+    fn del(&'txn mut self, db: &Self::Database, key: KQ) -> Result<bool, Self::Error>
     where
         Self: 'txn;
 
     /// Removes all entries from the specified database.
-    fn clear_db(&'txn mut self, db: Self::Database) -> Result<(), Self::Error>
+    fn clear_db(&'txn mut self, db: &Self::Database) -> Result<(), Self::Error>
     where
         Self: 'txn;
 
