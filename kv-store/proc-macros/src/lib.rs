@@ -12,13 +12,16 @@ pub(crate) mod binary_static_env;
 /// values are byte strings, i.e. an LMDB-like storage environment. This macro
 /// exists because the required trait bounds are quite long and repetitive.
 ///
-/// This macro attribute expects four comma-separated arguments representing the
-/// following:
-/// - Main storage environment type
-/// - Configuration type used to initialize a storage environment
+/// This macro attribute expects four to five comma-separated arguments
+/// representing the following:
+/// - Main storage environment type.
+/// - Configuration type used to initialize a storage environment.
 /// - Configuration type used to initialize a database within a storage
-///   environment
-/// - Configuration type passed to environment sync/flush operations
+///   environment.
+/// - Configuration type passed to environment sync/flush operations.
+/// - Identifier path indicating where to find the `atelier_kv_store` crate.
+///   This may be needed if you have renamed the `atelier_kv_store` crate in
+///   your `Cargo.toml`. Defaults to `::atelier_kv_store`.
 ///
 /// Usage example:
 ///
@@ -47,26 +50,6 @@ pub fn require_binary_static_env(
     item: proc_macro::TokenStream,
 ) -> proc_macro::TokenStream {
     binary_static_env::require_binary_static_env(attr.into(), item.into()).into()
-}
-
-/// Same as [`require_binary_static_env`][require_binary_static_env], except it
-/// is intended for use from within the `atelier-kv-store` crate. The main
-/// difference is in how items from the `atelier-kv-store` crate are referenced.
-/// (This macro references them using paths that start with `crate::`, while the
-/// [`require_binary_static_env`][require_binary_static_env] macro uses paths
-/// that start with `::atelier_kv_store::`.)
-///
-/// This macro should only be needed by developers of `atelier-kv-store`. If you
-/// don't know which macro to use, prefer
-/// [`require_binary_static_env`][require_binary_static_env].
-///
-/// [require_binary_static_env]: self::require_binary_static_env
-#[proc_macro_attribute]
-pub fn require_binary_static_env_inside_crate(
-    attr: proc_macro::TokenStream,
-    item: proc_macro::TokenStream,
-) -> proc_macro::TokenStream {
-    binary_static_env::require_binary_static_env_inside_crate(attr.into(), item.into()).into()
 }
 
 /// Modifies the specified list of identifier names so that it contains no
@@ -116,14 +99,17 @@ fn remove_ident_name_conflicts(names: &mut Vec<String>, forbidden: &HashSet<Stri
     }
 }
 
+/// Utilities for testing.
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::iter::{FromIterator, IntoIterator};
+pub(crate) mod test_util {
+    use std::iter::FromIterator;
 
-    /// Simple utility that converts a collection of `ToString` objects into a
-    /// collection of `String` objects.
-    fn map_to_string<C0, C1>(collection: C0) -> C1
+    /// Simple utility that converts a collection of [`ToString`][ToString]
+    /// objects into a collection of [`String`][String] objects.
+    ///
+    /// [ToString]: std::string::ToString
+    /// [String]: std::string::String
+    pub(crate) fn map_to_string<C0, C1>(collection: C0) -> C1
     where
         C0: IntoIterator,
         C0::Item: ToString,
@@ -131,6 +117,12 @@ mod tests {
     {
         collection.into_iter().map(|s| s.to_string()).collect()
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::test_util::map_to_string;
+    use super::*;
 
     /// Helper that executes a single test case for the
     /// `remove_ident_name_conflicts` function. The arguments provide an initial

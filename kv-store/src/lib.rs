@@ -619,7 +619,7 @@ pub unsafe trait CursorReturnedDataHandle<'cursor, D: ?Sized> {
 #[cfg(test)]
 pub(crate) mod test_util {
     use super::*;
-    use atelier_kv_store_proc_macros::require_binary_static_env_inside_crate;
+    use atelier_kv_store_proc_macros::require_binary_static_env;
     use std::collections::BTreeMap;
     use std::fmt::Debug;
 
@@ -644,7 +644,7 @@ pub(crate) mod test_util {
     ///
     /// # Panics
     /// Panics if the storage environment returns an unexpected error.
-    #[require_binary_static_env_inside_crate(E, EC, DC, SC)]
+    #[require_binary_static_env(E, EC, DC, SC, crate)]
     pub(crate) fn create_dbs_for_snapshot<E, EC, DC, SC>(
         env: &mut E,
         snapshot: EnvSnapshot<Option<&str>>,
@@ -675,7 +675,7 @@ pub(crate) mod test_util {
     /// # Panics
     /// Panics if the storage environment returns an unexpected error, or if the
     /// environment contents do not match the snapshot.
-    #[require_binary_static_env_inside_crate(E, EC, DC, SC)]
+    #[require_binary_static_env(E, EC, DC, SC, crate)]
     pub(crate) fn test_db_contents_equal<E, EC, DC, SC>(
         env: &E,
         expected: &EnvSnapshot<E::Database>,
@@ -716,7 +716,7 @@ pub(crate) mod test_util {
     ///
     /// # Panics
     /// Panics if the storage environment returns an unexpected error.
-    #[require_binary_static_env_inside_crate(E, EC, DC, SC)]
+    #[require_binary_static_env(E, EC, DC, SC, crate)]
     pub(crate) fn add_db_contents<E, EC, DC, SC>(
         env: &mut E,
         contents_to_add: &EnvSnapshot<E::Database>,
@@ -749,7 +749,7 @@ pub(crate) mod test_util {
     /// Panics if the storage environment returns an unexpected error, or if
     /// reading the database after the data insertions does not yield the
     /// expected results.
-    #[require_binary_static_env_inside_crate(E, EC, DC, SC)]
+    #[require_binary_static_env(E, EC, DC, SC, crate)]
     pub(crate) fn basic_test<E, EC, DC, SC>(env: &mut E, db_cfg: DC)
     where
         DC: Clone,
