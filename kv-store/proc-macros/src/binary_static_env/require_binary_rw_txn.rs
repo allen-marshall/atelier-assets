@@ -12,7 +12,7 @@ use crate::{
 use proc_macro2::{Span, TokenStream};
 use quote::ToTokens;
 use syn::visit::{visit_path, visit_type};
-use syn::{parse2, parse_quote, BoundLifetimes, Generics, Lifetime, TypeParamBound};
+use syn::{parse2, parse_quote, BoundLifetimes, Lifetime, TypeParamBound};
 
 /// Represents the lifetime names to be used in the output of a specific
 /// invocation of the [`require_binary_rw_txn`][require_binary_rw_txn] macro
@@ -69,109 +69,6 @@ fn name_lifetimes(args: &TypeAndCrateRootArgs) -> BoundsLifetimeNames {
     }
 }
 
-/// Gets the trait bound that should be used to require [`AsRef`][AsRef]`<[u8]>`
-/// for a type.
-///
-/// [AsRef]: std::convert::AsRef
-fn as_ref_trait_bound(
-    args: &TypeAndCrateRootArgs,
-    lt_names: &BoundsLifetimeNames,
-) -> TypeParamBound {
-    // Bring parameters into scope so we can use them in parse_quote.
-    let (crate_root_path, txn_lt, kq_lt, kp_lt, vp_lt) = (
-        &args.crate_root_path,
-        &lt_names.txn_lt,
-        &lt_names.kq_lt,
-        &lt_names.kp_lt,
-        &lt_names.vp_lt,
-    );
-    parse_quote! {
-        #crate_root_path::lt_trait_wrappers::AsRefLt4<
-            #txn_lt,
-            #kq_lt,
-            #kp_lt,
-            #vp_lt,
-            [u8],
-        >
-    }
-}
-
-/// Modifies the specified generics data so that its `where` clause contains the
-/// bounds required to use a binary read-write storage transaction, i.e. the
-/// bounds needed when using
-/// [`require_binary_rw_txn`][require_binary_rw_txn].
-///
-/// [require_binary_rw_txn]: crate::require_binary_rw_txn
-fn add_bounds(
-    generics: &mut Generics,
-    args: &TypeAndCrateRootArgs,
-    lt_names: &BoundsLifetimeNames,
-) {
-    // Bring parameters into scope so we can use them in parse_quote.
-    let (txn_lt, kq_lt, kp_lt, vp_lt, txn_type) = (
-        &lt_names.txn_lt,
-        &lt_names.kq_lt,
-        &lt_names.kp_lt,
-        &lt_names.vp_lt,
-        &args.type_arg,
-    );
-
-    let lt_quant: BoundLifetimes = parse_quote! { for<#txn_lt, #kq_lt, #kp_lt, #vp_lt,> };
-    let txn_trait = txn_trait_bound(&lt_names.txn_lt, &lt_names.kq_lt, &args.crate_root_path);
-    let cursor_basic_trait = cursor_basic_trait_bound(&args.crate_root_path);
-    let rw_txn_trait = rw_txn_trait_bound(
-        &lt_names.txn_lt,
-        &lt_names.kq_lt,
-        &lt_names.kp_lt,
-        &lt_names.vp_lt,
-        &args.crate_root_path,
-    );
-    let as_ref_trait = as_ref_trait_bound(&args, &lt_names);
-    add_where_predicates(
-        generics,
-        vec![
-            parse_quote! {
-                #lt_quant #txn_type: #rw_txn_trait
-            },
-            parse_quote! {
-                #lt_quant <#txn_type as #txn_trait>::ReturnedValue: #as_ref_trait
-            },
-            parse_quote! {
-                #lt_quant <<#txn_type as #txn_trait>::RoCursor as #cursor_basic_trait>::ReturnedKey: #as_ref_trait
-            },
-            parse_quote! {
-                #lt_quant <<#txn_type as #txn_trait>::RoCursor as #cursor_basic_trait>::ReturnedValue: #as_ref_trait
-            },
-            parse_quote! {
-                #lt_quant <<#txn_type as #rw_txn_trait>::RwCursor as #cursor_basic_trait>::ReturnedKey: #as_ref_trait
-            },
-            parse_quote! {
-                #lt_quant <<#txn_type as #rw_txn_trait>::RwCursor as #cursor_basic_trait>::ReturnedValue: #as_ref_trait
-            },
-        ],
-    );
-}
-
-/// Helper function used to implement
-/// [`require_binary_rw_txn`][require_binary_rw_txn].
-///
-/// [require_binary_rw_txn]: self::require_binary_rw_txn
-fn require_binary_rw_txn_internal(
-    attr: TokenStream,
-    item: TokenStream,
-) -> Result<TokenStream, syn::Error> {
-    let args = parse2(attr)?;
-
-    // Construct the required lifetime names in a way that won't conflict with
-    // any lifetimes that might be mentioned in the arguments.
-    let lt_names = name_lifetimes(&args);
-
-    // Parse the item and augment its where clause with the required bounds.
-    let mut output = parse2(item)?;
-    add_bounds(find_generics_mut(&mut output)?, &args, &lt_names);
-    Ok(output.into_token_stream())
-}
-
 /// Implementation for the
 /// [`require_binary_rw_txn`][require_binary_txn] macro. The main difference
 /// between this function and the macro is that this function uses the
@@ -179,7 +76,67 @@ fn require_binary_rw_txn_internal(
 ///
 /// [require_binary_txn]: crate::require_binary_txn
 pub(crate) fn require_binary_rw_txn(attr: TokenStream, item: TokenStream) -> TokenStream {
-    match require_binary_rw_txn_internal(attr, item) {
+    // Internal helper function used to enable ? for error handling.
+    fn inner(attr: TokenStream, item: TokenStream) -> Result<TokenStream, syn::Error> {
+        let args = parse2(attr)?;
+
+        // Construct the required lifetime names in a way that won't conflict with
+        // any lifetimes that might be mentioned in the arguments.
+        let lt_names = name_lifetimes(&args);
+
+        // Bring parameters into scope so we can use them in parse_quote.
+        let (txn_lt, kq_lt, kp_lt, vp_lt, txn_type, crate_root_path) = (
+            &lt_names.txn_lt,
+            &lt_names.kq_lt,
+            &lt_names.kp_lt,
+            &lt_names.vp_lt,
+            &args.type_arg,
+            &args.crate_root_path,
+        );
+
+        let lt_quant: BoundLifetimes = parse_quote! { for<#txn_lt, #kq_lt, #kp_lt, #vp_lt,> };
+        let txn_trait = txn_trait_bound(&lt_names.txn_lt, &lt_names.kq_lt, &args.crate_root_path);
+        let cursor_basic_trait = cursor_basic_trait_bound(&args.crate_root_path);
+        let rw_txn_trait = rw_txn_trait_bound(
+            &lt_names.txn_lt,
+            &lt_names.kq_lt,
+            &lt_names.kp_lt,
+            &lt_names.vp_lt,
+            &args.crate_root_path,
+        );
+        let as_ref_trait: TypeParamBound = parse_quote! {
+            #crate_root_path::lt_trait_wrappers::AsRefLt4<#txn_lt, #kq_lt, #kp_lt, #vp_lt, [u8],>
+        };
+
+        // Parse the item and augment its where clause with the required bounds.
+        let mut output = parse2(item)?;
+        add_where_predicates(
+            find_generics_mut(&mut output)?,
+            vec![
+                parse_quote! {
+                    #lt_quant #txn_type: #rw_txn_trait
+                },
+                parse_quote! {
+                    #lt_quant <#txn_type as #txn_trait>::ReturnedValue: #as_ref_trait
+                },
+                parse_quote! {
+                    #lt_quant <<#txn_type as #txn_trait>::RoCursor as #cursor_basic_trait>::ReturnedKey: #as_ref_trait
+                },
+                parse_quote! {
+                    #lt_quant <<#txn_type as #txn_trait>::RoCursor as #cursor_basic_trait>::ReturnedValue: #as_ref_trait
+                },
+                parse_quote! {
+                    #lt_quant <<#txn_type as #rw_txn_trait>::RwCursor as #cursor_basic_trait>::ReturnedKey: #as_ref_trait
+                },
+                parse_quote! {
+                    #lt_quant <<#txn_type as #rw_txn_trait>::RwCursor as #cursor_basic_trait>::ReturnedValue: #as_ref_trait
+                },
+            ],
+        );
+        Ok(output.into_token_stream())
+    }
+
+    match inner(attr, item) {
         Ok(tokens) => tokens,
         Err(err) => err.to_compile_error(),
     }
@@ -238,196 +195,6 @@ mod tests {
         );
     }
 
-    /// Tests the `as_ref_trait_bound` function.
-    #[test]
-    fn as_ref_trait_bound_test() {
-        let bound = as_ref_trait_bound(
-            &parse_quote! { A, crate },
-            &BoundsLifetimeNames {
-                txn_lt: parse_quote! { 'txn },
-                kq_lt: parse_quote! { 'kq },
-                kp_lt: parse_quote! { 'kp },
-                vp_lt: parse_quote! { 'vp },
-            },
-        );
-        assert_eq!(
-            bound,
-            parse_quote! {
-                crate::lt_trait_wrappers::AsRefLt4<
-                    'txn,
-                    'kq,
-                    'kp,
-                    'vp,
-                    [u8],
-                >
-            }
-        );
-
-        let bound = as_ref_trait_bound(
-            &parse_quote! { A },
-            &BoundsLifetimeNames {
-                txn_lt: parse_quote! { 'txn_1 },
-                kq_lt: parse_quote! { 'kq_0 },
-                kp_lt: parse_quote! { 'kp_1 },
-                vp_lt: parse_quote! { 'vp_0 },
-            },
-        );
-        assert_eq!(
-            bound,
-            parse_quote! {
-                ::atelier_kv_store::lt_trait_wrappers::AsRefLt4<
-                    'txn_1,
-                    'kq_0,
-                    'kp_1,
-                    'vp_0,
-                    [u8],
-                >
-            }
-        );
-    }
-
-    /// Tests the `add_bounds` function.
-    #[test]
-    fn add_bounds_test() {
-        let mut test_case =
-            parse_quote! { fn do_something<T>(txn: &mut T) where T: ::std::fmt::Debug {} };
-        let generics = find_generics_mut(&mut test_case).unwrap();
-        add_bounds(
-            generics,
-            &parse_quote! { T, crate },
-            &BoundsLifetimeNames {
-                txn_lt: parse_quote! { 'txn },
-                kq_lt: parse_quote! { 'kq },
-                kp_lt: parse_quote! { 'kp },
-                vp_lt: parse_quote! { 'vp },
-            },
-        );
-        assert_eq!(
-            generics.where_clause,
-            Some(parse_quote! {
-            where T: ::std::fmt::Debug,
-            for<'txn, 'kq, 'kp, 'vp,> T: crate::ReadWriteTransaction<'txn, &'kq [u8], &'kp [u8], &'vp [u8],>,
-            for<'txn, 'kq, 'kp, 'vp,> <T as crate::Transaction<'txn, &'kq [u8],>>::ReturnedValue: crate::lt_trait_wrappers::AsRefLt4<'txn, 'kq, 'kp, 'vp, [u8],>,
-            for<'txn, 'kq, 'kp, 'vp,> <<T as crate::Transaction<'txn, &'kq [u8],>>::RoCursor as crate::CursorBasic>::ReturnedKey: crate::lt_trait_wrappers::AsRefLt4<'txn, 'kq, 'kp, 'vp, [u8],>,
-            for<'txn, 'kq, 'kp, 'vp,> <<T as crate::Transaction<'txn, &'kq [u8],>>::RoCursor as crate::CursorBasic>::ReturnedValue: crate::lt_trait_wrappers::AsRefLt4<'txn, 'kq, 'kp, 'vp, [u8],>,
-            for<'txn, 'kq, 'kp, 'vp,> <<T as crate::ReadWriteTransaction<'txn, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwCursor as crate::CursorBasic>::ReturnedKey: crate::lt_trait_wrappers::AsRefLt4<'txn, 'kq, 'kp, 'vp, [u8],>,
-            for<'txn, 'kq, 'kp, 'vp,> <<T as crate::ReadWriteTransaction<'txn, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwCursor as crate::CursorBasic>::ReturnedValue: crate::lt_trait_wrappers::AsRefLt4<'txn, 'kq, 'kp, 'vp, [u8],>
-            })
-        );
-
-        let mut test_case =
-            parse_quote! { fn do_something<T>(txn: &mut T) where T: ::std::fmt::Debug {} };
-        let generics = find_generics_mut(&mut test_case).unwrap();
-        add_bounds(
-            generics,
-            &parse_quote! { T },
-            &BoundsLifetimeNames {
-                txn_lt: parse_quote! { 'txn },
-                kq_lt: parse_quote! { 'kq },
-                kp_lt: parse_quote! { 'kp },
-                vp_lt: parse_quote! { 'vp },
-            },
-        );
-        assert_eq!(
-            generics.where_clause,
-            Some(parse_quote! {
-            where T: ::std::fmt::Debug,
-            for<'txn, 'kq, 'kp, 'vp,> T: ::atelier_kv_store::ReadWriteTransaction<'txn, &'kq [u8], &'kp [u8], &'vp [u8],>,
-            for<'txn, 'kq, 'kp, 'vp,> <T as ::atelier_kv_store::Transaction<'txn, &'kq [u8],>>::ReturnedValue: ::atelier_kv_store::lt_trait_wrappers::AsRefLt4<'txn, 'kq, 'kp, 'vp, [u8],>,
-            for<'txn, 'kq, 'kp, 'vp,> <<T as ::atelier_kv_store::Transaction<'txn, &'kq [u8],>>::RoCursor as ::atelier_kv_store::CursorBasic>::ReturnedKey: ::atelier_kv_store::lt_trait_wrappers::AsRefLt4<'txn, 'kq, 'kp, 'vp, [u8],>,
-            for<'txn, 'kq, 'kp, 'vp,> <<T as ::atelier_kv_store::Transaction<'txn, &'kq [u8],>>::RoCursor as ::atelier_kv_store::CursorBasic>::ReturnedValue: ::atelier_kv_store::lt_trait_wrappers::AsRefLt4<'txn, 'kq, 'kp, 'vp, [u8],>,
-            for<'txn, 'kq, 'kp, 'vp,> <<T as ::atelier_kv_store::ReadWriteTransaction<'txn, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwCursor as ::atelier_kv_store::CursorBasic>::ReturnedKey: ::atelier_kv_store::lt_trait_wrappers::AsRefLt4<'txn, 'kq, 'kp, 'vp, [u8],>,
-            for<'txn, 'kq, 'kp, 'vp,> <<T as ::atelier_kv_store::ReadWriteTransaction<'txn, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwCursor as ::atelier_kv_store::CursorBasic>::ReturnedValue: ::atelier_kv_store::lt_trait_wrappers::AsRefLt4<'txn, 'kq, 'kp, 'vp, [u8],>
-            })
-        );
-    }
-
-    /// Tests the `require_binary_rw_txn_internal` function.
-    #[test]
-    fn require_binary_rw_txn_internal_test() {
-        let test_output: Item = parse2(
-            require_binary_rw_txn_internal(
-                parse_quote! { T, crate },
-                parse_quote! { fn do_something<T>(txn: &mut T) {} },
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(
-            test_output,
-            parse_quote! {
-                fn do_something<T>(txn: &mut T) where
-                    for<'txn, 'kq, 'kp, 'vp,> T: crate::ReadWriteTransaction<'txn, &'kq [u8], &'kp [u8], &'vp [u8],>,
-                    for<'txn, 'kq, 'kp, 'vp,> <T as crate::Transaction<'txn, &'kq [u8],>>::ReturnedValue: crate::lt_trait_wrappers::AsRefLt4<'txn, 'kq, 'kp, 'vp, [u8],>,
-                    for<'txn, 'kq, 'kp, 'vp,> <<T as crate::Transaction<'txn, &'kq [u8],>>::RoCursor as crate::CursorBasic>::ReturnedKey: crate::lt_trait_wrappers::AsRefLt4<'txn, 'kq, 'kp, 'vp, [u8],>,
-                    for<'txn, 'kq, 'kp, 'vp,> <<T as crate::Transaction<'txn, &'kq [u8],>>::RoCursor as crate::CursorBasic>::ReturnedValue: crate::lt_trait_wrappers::AsRefLt4<'txn, 'kq, 'kp, 'vp, [u8],>,
-                    for<'txn, 'kq, 'kp, 'vp,> <<T as crate::ReadWriteTransaction<'txn, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwCursor as crate::CursorBasic>::ReturnedKey: crate::lt_trait_wrappers::AsRefLt4<'txn, 'kq, 'kp, 'vp, [u8],>,
-                    for<'txn, 'kq, 'kp, 'vp,> <<T as crate::ReadWriteTransaction<'txn, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwCursor as crate::CursorBasic>::ReturnedValue: crate::lt_trait_wrappers::AsRefLt4<'txn, 'kq, 'kp, 'vp, [u8],>
-                {}
-            }
-        );
-
-        let test_output: Item = parse2(
-            require_binary_rw_txn_internal(
-                parse_quote! { T, crate },
-                parse_quote! { fn do_something<T>(txn: &mut T) where T: ::std::fmt::Debug {} },
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(
-            test_output,
-            parse_quote! {
-                fn do_something<T>(txn: &mut T) where
-                    T: ::std::fmt::Debug,
-                    for<'txn, 'kq, 'kp, 'vp,> T: crate::ReadWriteTransaction<'txn, &'kq [u8], &'kp [u8], &'vp [u8],>,
-                    for<'txn, 'kq, 'kp, 'vp,> <T as crate::Transaction<'txn, &'kq [u8],>>::ReturnedValue: crate::lt_trait_wrappers::AsRefLt4<'txn, 'kq, 'kp, 'vp, [u8],>,
-                    for<'txn, 'kq, 'kp, 'vp,> <<T as crate::Transaction<'txn, &'kq [u8],>>::RoCursor as crate::CursorBasic>::ReturnedKey: crate::lt_trait_wrappers::AsRefLt4<'txn, 'kq, 'kp, 'vp, [u8],>,
-                    for<'txn, 'kq, 'kp, 'vp,> <<T as crate::Transaction<'txn, &'kq [u8],>>::RoCursor as crate::CursorBasic>::ReturnedValue: crate::lt_trait_wrappers::AsRefLt4<'txn, 'kq, 'kp, 'vp, [u8],>,
-                    for<'txn, 'kq, 'kp, 'vp,> <<T as crate::ReadWriteTransaction<'txn, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwCursor as crate::CursorBasic>::ReturnedKey: crate::lt_trait_wrappers::AsRefLt4<'txn, 'kq, 'kp, 'vp, [u8],>,
-                    for<'txn, 'kq, 'kp, 'vp,> <<T as crate::ReadWriteTransaction<'txn, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwCursor as crate::CursorBasic>::ReturnedValue: crate::lt_trait_wrappers::AsRefLt4<'txn, 'kq, 'kp, 'vp, [u8],>
-                {}
-            }
-        );
-
-        let test_output: Item = parse2(
-            require_binary_rw_txn_internal(
-                parse_quote! { T },
-                parse_quote! { fn do_something<T>(txn: &mut T) where T: ::std::fmt::Debug {} },
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(
-            test_output,
-            parse_quote! {
-                fn do_something<T>(txn: &mut T) where
-                    T: ::std::fmt::Debug,
-                    for<'txn, 'kq, 'kp, 'vp,> T: ::atelier_kv_store::ReadWriteTransaction<'txn, &'kq [u8], &'kp [u8], &'vp [u8],>,
-                    for<'txn, 'kq, 'kp, 'vp,> <T as ::atelier_kv_store::Transaction<'txn, &'kq [u8],>>::ReturnedValue: ::atelier_kv_store::lt_trait_wrappers::AsRefLt4<'txn, 'kq, 'kp, 'vp, [u8],>,
-                    for<'txn, 'kq, 'kp, 'vp,> <<T as ::atelier_kv_store::Transaction<'txn, &'kq [u8],>>::RoCursor as ::atelier_kv_store::CursorBasic>::ReturnedKey: ::atelier_kv_store::lt_trait_wrappers::AsRefLt4<'txn, 'kq, 'kp, 'vp, [u8],>,
-                    for<'txn, 'kq, 'kp, 'vp,> <<T as ::atelier_kv_store::Transaction<'txn, &'kq [u8],>>::RoCursor as ::atelier_kv_store::CursorBasic>::ReturnedValue: ::atelier_kv_store::lt_trait_wrappers::AsRefLt4<'txn, 'kq, 'kp, 'vp, [u8],>,
-                    for<'txn, 'kq, 'kp, 'vp,> <<T as ::atelier_kv_store::ReadWriteTransaction<'txn, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwCursor as ::atelier_kv_store::CursorBasic>::ReturnedKey: ::atelier_kv_store::lt_trait_wrappers::AsRefLt4<'txn, 'kq, 'kp, 'vp, [u8],>,
-                    for<'txn, 'kq, 'kp, 'vp,> <<T as ::atelier_kv_store::ReadWriteTransaction<'txn, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwCursor as ::atelier_kv_store::CursorBasic>::ReturnedValue: ::atelier_kv_store::lt_trait_wrappers::AsRefLt4<'txn, 'kq, 'kp, 'vp, [u8],>{}
-            }
-        );
-
-        require_binary_rw_txn_internal(
-            parse_quote! {},
-            parse_quote! { fn do_something<T>(txn: &mut T) where T: ::std::fmt::Debug {} },
-        )
-        .unwrap_err();
-
-        require_binary_rw_txn_internal(
-            parse_quote! { T, self, X },
-            parse_quote! { fn do_something<T>(txn: &mut T) where T: ::std::fmt::Debug {} },
-        )
-        .unwrap_err();
-
-        require_binary_rw_txn_internal(parse_quote! { T }, parse_quote! { const X: u32 = 0; })
-            .unwrap_err();
-    }
-
     /// Tests the `require_binary_rw_txn` function.
     #[test]
     fn require_binary_rw_txn_test() {
@@ -451,7 +218,7 @@ mod tests {
         );
 
         let test_output: Item = parse2(require_binary_rw_txn(
-            parse_quote! { T, crate },
+            parse_quote! { &'txn T, crate },
             parse_quote! { fn do_something<T>(txn: &mut T) where T: ::std::fmt::Debug {} },
         ))
         .unwrap();
@@ -460,12 +227,12 @@ mod tests {
             parse_quote! {
                 fn do_something<T>(txn: &mut T) where
                     T: ::std::fmt::Debug,
-                    for<'txn, 'kq, 'kp, 'vp,> T: crate::ReadWriteTransaction<'txn, &'kq [u8], &'kp [u8], &'vp [u8],>,
-                    for<'txn, 'kq, 'kp, 'vp,> <T as crate::Transaction<'txn, &'kq [u8],>>::ReturnedValue: crate::lt_trait_wrappers::AsRefLt4<'txn, 'kq, 'kp, 'vp, [u8],>,
-                    for<'txn, 'kq, 'kp, 'vp,> <<T as crate::Transaction<'txn, &'kq [u8],>>::RoCursor as crate::CursorBasic>::ReturnedKey: crate::lt_trait_wrappers::AsRefLt4<'txn, 'kq, 'kp, 'vp, [u8],>,
-                    for<'txn, 'kq, 'kp, 'vp,> <<T as crate::Transaction<'txn, &'kq [u8],>>::RoCursor as crate::CursorBasic>::ReturnedValue: crate::lt_trait_wrappers::AsRefLt4<'txn, 'kq, 'kp, 'vp, [u8],>,
-                    for<'txn, 'kq, 'kp, 'vp,> <<T as crate::ReadWriteTransaction<'txn, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwCursor as crate::CursorBasic>::ReturnedKey: crate::lt_trait_wrappers::AsRefLt4<'txn, 'kq, 'kp, 'vp, [u8],>,
-                    for<'txn, 'kq, 'kp, 'vp,> <<T as crate::ReadWriteTransaction<'txn, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwCursor as crate::CursorBasic>::ReturnedValue: crate::lt_trait_wrappers::AsRefLt4<'txn, 'kq, 'kp, 'vp, [u8],>
+                    for<'txn_0, 'kq, 'kp, 'vp,> &'txn T: crate::ReadWriteTransaction<'txn_0, &'kq [u8], &'kp [u8], &'vp [u8],>,
+                    for<'txn_0, 'kq, 'kp, 'vp,> <&'txn T as crate::Transaction<'txn_0, &'kq [u8],>>::ReturnedValue: crate::lt_trait_wrappers::AsRefLt4<'txn_0, 'kq, 'kp, 'vp, [u8],>,
+                    for<'txn_0, 'kq, 'kp, 'vp,> <<&'txn T as crate::Transaction<'txn_0, &'kq [u8],>>::RoCursor as crate::CursorBasic>::ReturnedKey: crate::lt_trait_wrappers::AsRefLt4<'txn_0, 'kq, 'kp, 'vp, [u8],>,
+                    for<'txn_0, 'kq, 'kp, 'vp,> <<&'txn T as crate::Transaction<'txn_0, &'kq [u8],>>::RoCursor as crate::CursorBasic>::ReturnedValue: crate::lt_trait_wrappers::AsRefLt4<'txn_0, 'kq, 'kp, 'vp, [u8],>,
+                    for<'txn_0, 'kq, 'kp, 'vp,> <<&'txn T as crate::ReadWriteTransaction<'txn_0, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwCursor as crate::CursorBasic>::ReturnedKey: crate::lt_trait_wrappers::AsRefLt4<'txn_0, 'kq, 'kp, 'vp, [u8],>,
+                    for<'txn_0, 'kq, 'kp, 'vp,> <<&'txn T as crate::ReadWriteTransaction<'txn_0, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwCursor as crate::CursorBasic>::ReturnedValue: crate::lt_trait_wrappers::AsRefLt4<'txn_0, 'kq, 'kp, 'vp, [u8],>
                 {}
             }
         );

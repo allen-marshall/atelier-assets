@@ -14,7 +14,7 @@ use proc_macro2::{Span, TokenStream};
 use quote::ToTokens;
 use syn::parse::{Parse, ParseStream};
 use syn::visit::{visit_path, visit_type};
-use syn::{parse2, parse_quote, BoundLifetimes, Generics, Lifetime, Token, Type, TypeParamBound};
+use syn::{parse2, parse_quote, BoundLifetimes, Lifetime, Type, TypeParamBound};
 
 /// Represents the (parsed) arguments expected by the
 /// [`require_binary_static_env`][require_binary_static_env] macro attribute.
@@ -141,148 +141,6 @@ fn name_lifetimes(args: &Args) -> BoundsLifetimeNames {
     }
 }
 
-/// Gets the trait bound that should be used to require [`AsRef`][AsRef]`<[u8]>`
-/// for a type.
-///
-/// [AsRef]: std::convert::AsRef
-fn as_ref_trait_bound(args: &Args, lt_names: &BoundsLifetimeNames) -> TypeParamBound {
-    // Bring parameters into scope so we can use them in parse_quote.
-    let (crate_root_path, env_lt, txn_lt, dbid_lt, kq_lt, kp_lt, vp_lt) = (
-        &args.crate_root_path,
-        &lt_names.env_lt,
-        &lt_names.txn_lt,
-        &lt_names.dbid_lt,
-        &lt_names.kq_lt,
-        &lt_names.kp_lt,
-        &lt_names.vp_lt,
-    );
-    parse_quote! {
-        #crate_root_path::lt_trait_wrappers::AsRefLt6<
-            #env_lt,
-            #txn_lt,
-            #dbid_lt,
-            #kq_lt,
-            #kp_lt,
-            #vp_lt,
-            [u8],
-        >
-    }
-}
-
-/// Generates the lifetime quantifiers that should be used in higher-rank trait
-/// bounds in the output of the
-/// [`require_binary_static_env`][require_binary_static_env] macro.
-///
-/// [require_binary_static_env]: crate::require_binary_static_env
-fn lifetime_quantifier(lt_names: &BoundsLifetimeNames, include_txn_lt: bool) -> BoundLifetimes {
-    // Bring parameters into scope so we can use them in parse_quote.
-    let (env_lt, txn_lt, dbid_lt, kq_lt, kp_lt, vp_lt) = (
-        &lt_names.env_lt,
-        &lt_names.txn_lt,
-        &lt_names.dbid_lt,
-        &lt_names.kq_lt,
-        &lt_names.kp_lt,
-        &lt_names.vp_lt,
-    );
-    let mut output = BoundLifetimes::default();
-    output.lifetimes.push(parse_quote! { #env_lt });
-    if include_txn_lt {
-        output.lifetimes.push(parse_quote! { #txn_lt });
-    }
-    output.lifetimes.push(parse_quote! { #dbid_lt });
-    output.lifetimes.push(parse_quote! { #kq_lt });
-    output.lifetimes.push(parse_quote! { #kp_lt });
-    output.lifetimes.push(parse_quote! { #vp_lt });
-    output.lifetimes.push_punct(<Token![,]>::default());
-    output
-}
-
-/// Modifies the specified generics data so that its `where` clause contains the
-/// bounds required to use a binary static storage environment, i.e. the bounds
-/// needed when using [`require_binary_static_env`][require_binary_static_env].
-///
-/// [require_binary_static_env]: crate::require_binary_static_env
-fn add_bounds(generics: &mut Generics, args: &Args, lt_names: &BoundsLifetimeNames) {
-    // Bring parameters into scope so we can use them in parse_quote.
-    let env_type = &args.env_type;
-
-    let lt_quant_env = lifetime_quantifier(lt_names, false);
-    let lt_quant_txn = lifetime_quantifier(lt_names, true);
-    let env_trait = env_trait_bound(
-        &lt_names.env_lt,
-        &lt_names.dbid_lt,
-        &lt_names.kq_lt,
-        &lt_names.kp_lt,
-        &lt_names.vp_lt,
-        &args.env_cfg_type,
-        &args.db_cfg_type,
-        &args.sync_cfg_type,
-        &args.crate_root_path,
-    );
-    let txn_trait = txn_trait_bound(&lt_names.txn_lt, &lt_names.kq_lt, &args.crate_root_path);
-    let rw_txn_trait = rw_txn_trait_bound(
-        &lt_names.txn_lt,
-        &lt_names.kq_lt,
-        &lt_names.kp_lt,
-        &lt_names.vp_lt,
-        &args.crate_root_path,
-    );
-    let cursor_basic_trait = cursor_basic_trait_bound(&args.crate_root_path);
-    let as_ref_trait = as_ref_trait_bound(args, lt_names);
-    add_where_predicates(
-        generics,
-        vec![
-            parse_quote! {
-                #env_type: 'static + #lt_quant_env #env_trait
-            },
-            parse_quote! {
-                #lt_quant_txn <<#env_type as #env_trait>::RoTransaction as #txn_trait>::ReturnedValue: #as_ref_trait
-            },
-            parse_quote! {
-                #lt_quant_txn <<#env_type as #env_trait>::RwTransaction as #txn_trait>::ReturnedValue: #as_ref_trait
-            },
-            parse_quote! {
-                #lt_quant_txn <<<#env_type as #env_trait>::RoTransaction as #txn_trait>::RoCursor as #cursor_basic_trait>::ReturnedKey: #as_ref_trait
-            },
-            parse_quote! {
-                #lt_quant_txn <<<#env_type as #env_trait>::RoTransaction as #txn_trait>::RoCursor as #cursor_basic_trait>::ReturnedValue: #as_ref_trait
-            },
-            parse_quote! {
-                #lt_quant_txn <<<#env_type as #env_trait>::RwTransaction as #txn_trait>::RoCursor as #cursor_basic_trait>::ReturnedKey: #as_ref_trait
-            },
-            parse_quote! {
-                #lt_quant_txn <<<#env_type as #env_trait>::RwTransaction as #txn_trait>::RoCursor as #cursor_basic_trait>::ReturnedValue: #as_ref_trait
-            },
-            parse_quote! {
-                #lt_quant_txn <<<#env_type as #env_trait>::RwTransaction as #rw_txn_trait>::RwCursor as #cursor_basic_trait>::ReturnedKey: #as_ref_trait
-            },
-            parse_quote! {
-                #lt_quant_txn <<<#env_type as #env_trait>::RwTransaction as #rw_txn_trait>::RwCursor as #cursor_basic_trait>::ReturnedValue: #as_ref_trait
-            },
-        ],
-    );
-}
-
-/// Helper function used to implement
-/// [`require_binary_static_env`][require_binary_static_env].
-///
-/// [require_binary_static_env]: self::require_binary_static_env
-fn require_binary_static_env_internal(
-    attr: TokenStream,
-    item: TokenStream,
-) -> Result<TokenStream, syn::Error> {
-    let args = parse2(attr)?;
-
-    // Construct the required lifetime names in a way that won't conflict with
-    // any lifetimes that might be mentioned in the arguments.
-    let lt_names = name_lifetimes(&args);
-
-    // Parse the item and augment its where clause with the required bounds.
-    let mut output = parse2(item)?;
-    add_bounds(find_generics_mut(&mut output)?, &args, &lt_names);
-    Ok(output.into_token_stream())
-}
-
 /// Implementation for the
 /// [`require_binary_static_env`][require_binary_static_env] macro. The main
 /// difference between this function and the macro is that this function uses
@@ -290,7 +148,92 @@ fn require_binary_static_env_internal(
 ///
 /// [require_binary_static_env]: crate::require_binary_static_env
 pub(crate) fn require_binary_static_env(attr: TokenStream, item: TokenStream) -> TokenStream {
-    match require_binary_static_env_internal(attr, item) {
+    // Internal helper function used to enable ? for error handling.
+    fn inner(attr: TokenStream, item: TokenStream) -> Result<TokenStream, syn::Error> {
+        let args = parse2(attr)?;
+
+        // Construct the required lifetime names in a way that won't conflict with
+        // any lifetimes that might be mentioned in the arguments.
+        let lt_names = name_lifetimes(&args);
+
+        // Bring parameters into scope so we can use them in parse_quote.
+        let (env_lt, txn_lt, dbid_lt, kq_lt, kp_lt, vp_lt, env_type, crate_root_path) = (
+            &lt_names.env_lt,
+            &lt_names.txn_lt,
+            &lt_names.dbid_lt,
+            &lt_names.kq_lt,
+            &lt_names.kp_lt,
+            &lt_names.vp_lt,
+            &args.env_type,
+            &args.crate_root_path,
+        );
+
+        let lt_quant_env: BoundLifetimes =
+            parse_quote! { for<#env_lt, #dbid_lt, #kq_lt, #kp_lt, #vp_lt,> };
+        let lt_quant_txn: BoundLifetimes =
+            parse_quote! { for<#env_lt, #txn_lt, #dbid_lt, #kq_lt, #kp_lt, #vp_lt,> };
+        let env_trait = env_trait_bound(
+            &lt_names.env_lt,
+            &lt_names.dbid_lt,
+            &lt_names.kq_lt,
+            &lt_names.kp_lt,
+            &lt_names.vp_lt,
+            &args.env_cfg_type,
+            &args.db_cfg_type,
+            &args.sync_cfg_type,
+            &args.crate_root_path,
+        );
+        let txn_trait = txn_trait_bound(&lt_names.txn_lt, &lt_names.kq_lt, &args.crate_root_path);
+        let rw_txn_trait = rw_txn_trait_bound(
+            &lt_names.txn_lt,
+            &lt_names.kq_lt,
+            &lt_names.kp_lt,
+            &lt_names.vp_lt,
+            &args.crate_root_path,
+        );
+        let cursor_basic_trait = cursor_basic_trait_bound(&args.crate_root_path);
+        let as_ref_trait: TypeParamBound = parse_quote! {
+            #crate_root_path::lt_trait_wrappers::AsRefLt6<#env_lt, #txn_lt, #dbid_lt, #kq_lt, #kp_lt, #vp_lt, [u8],>
+        };
+
+        // Parse the item and augment its where clause with the required bounds.
+        let mut output = parse2(item)?;
+        add_where_predicates(
+            find_generics_mut(&mut output)?,
+            vec![
+                parse_quote! {
+                    #env_type: 'static + #lt_quant_env #env_trait
+                },
+                parse_quote! {
+                    #lt_quant_txn <<#env_type as #env_trait>::RoTransaction as #txn_trait>::ReturnedValue: #as_ref_trait
+                },
+                parse_quote! {
+                    #lt_quant_txn <<#env_type as #env_trait>::RwTransaction as #txn_trait>::ReturnedValue: #as_ref_trait
+                },
+                parse_quote! {
+                    #lt_quant_txn <<<#env_type as #env_trait>::RoTransaction as #txn_trait>::RoCursor as #cursor_basic_trait>::ReturnedKey: #as_ref_trait
+                },
+                parse_quote! {
+                    #lt_quant_txn <<<#env_type as #env_trait>::RoTransaction as #txn_trait>::RoCursor as #cursor_basic_trait>::ReturnedValue: #as_ref_trait
+                },
+                parse_quote! {
+                    #lt_quant_txn <<<#env_type as #env_trait>::RwTransaction as #txn_trait>::RoCursor as #cursor_basic_trait>::ReturnedKey: #as_ref_trait
+                },
+                parse_quote! {
+                    #lt_quant_txn <<<#env_type as #env_trait>::RwTransaction as #txn_trait>::RoCursor as #cursor_basic_trait>::ReturnedValue: #as_ref_trait
+                },
+                parse_quote! {
+                    #lt_quant_txn <<<#env_type as #env_trait>::RwTransaction as #rw_txn_trait>::RwCursor as #cursor_basic_trait>::ReturnedKey: #as_ref_trait
+                },
+                parse_quote! {
+                    #lt_quant_txn <<<#env_type as #env_trait>::RwTransaction as #rw_txn_trait>::RwCursor as #cursor_basic_trait>::ReturnedValue: #as_ref_trait
+                },
+            ],
+        );
+        Ok(output.into_token_stream())
+    }
+
+    match inner(attr, item) {
         Ok(tokens) => tokens,
         Err(err) => err.to_compile_error(),
     }
@@ -426,285 +369,6 @@ mod tests {
         );
     }
 
-    /// Tests the `as_ref_trait_bound` function.
-    #[test]
-    fn as_ref_trait_bound_test() {
-        let bound = as_ref_trait_bound(
-            &parse_quote! { A, B, C, D, crate },
-            &BoundsLifetimeNames {
-                env_lt: parse_quote! { 'env },
-                txn_lt: parse_quote! { 'txn },
-                dbid_lt: parse_quote! { 'dbid },
-                kq_lt: parse_quote! { 'kq },
-                kp_lt: parse_quote! { 'kp },
-                vp_lt: parse_quote! { 'vp },
-            },
-        );
-        assert_eq!(
-            bound,
-            parse_quote! {
-                crate::lt_trait_wrappers::AsRefLt6<
-                    'env,
-                    'txn,
-                    'dbid,
-                    'kq,
-                    'kp,
-                    'vp,
-                    [u8],
-                >
-            }
-        );
-
-        let bound = as_ref_trait_bound(
-            &parse_quote! { A, B, C, D },
-            &BoundsLifetimeNames {
-                env_lt: parse_quote! { 'env_0 },
-                txn_lt: parse_quote! { 'txn_1 },
-                dbid_lt: parse_quote! { 'dbid_2 },
-                kq_lt: parse_quote! { 'kq_0 },
-                kp_lt: parse_quote! { 'kp_1 },
-                vp_lt: parse_quote! { 'vp_2 },
-            },
-        );
-        assert_eq!(
-            bound,
-            parse_quote! {
-                ::atelier_kv_store::lt_trait_wrappers::AsRefLt6<
-                    'env_0,
-                    'txn_1,
-                    'dbid_2,
-                    'kq_0,
-                    'kp_1,
-                    'vp_2,
-                    [u8],
-                >
-            }
-        );
-    }
-
-    /// Tests the `lifetime_quantifier` function.
-    #[test]
-    fn lifetime_quantifier_test() {
-        let quantifier = lifetime_quantifier(
-            &BoundsLifetimeNames {
-                env_lt: parse_quote! { 'env },
-                txn_lt: parse_quote! { 'txn },
-                dbid_lt: parse_quote! { 'dbid },
-                kq_lt: parse_quote! { 'kq },
-                kp_lt: parse_quote! { 'kp },
-                vp_lt: parse_quote! { 'vp },
-            },
-            false,
-        );
-        assert_eq!(
-            quantifier,
-            parse_quote! { for<'env, 'dbid, 'kq, 'kp, 'vp,> }
-        );
-
-        let quantifier = lifetime_quantifier(
-            &BoundsLifetimeNames {
-                env_lt: parse_quote! { 'env },
-                txn_lt: parse_quote! { 'txn },
-                dbid_lt: parse_quote! { 'dbid },
-                kq_lt: parse_quote! { 'kq },
-                kp_lt: parse_quote! { 'kp },
-                vp_lt: parse_quote! { 'vp },
-            },
-            true,
-        );
-        assert_eq!(
-            quantifier,
-            parse_quote! { for<'env, 'txn, 'dbid, 'kq, 'kp, 'vp,> }
-        );
-
-        let quantifier = lifetime_quantifier(
-            &BoundsLifetimeNames {
-                env_lt: parse_quote! { 'env_0 },
-                txn_lt: parse_quote! { 'txn_1 },
-                dbid_lt: parse_quote! { 'dbid_2 },
-                kq_lt: parse_quote! { 'kq_0 },
-                kp_lt: parse_quote! { 'kp_1 },
-                vp_lt: parse_quote! { 'vp_2 },
-            },
-            false,
-        );
-        assert_eq!(
-            quantifier,
-            parse_quote! { for<'env_0, 'dbid_2, 'kq_0, 'kp_1, 'vp_2,> }
-        );
-
-        let quantifier = lifetime_quantifier(
-            &BoundsLifetimeNames {
-                env_lt: parse_quote! { 'env_0 },
-                txn_lt: parse_quote! { 'txn_1 },
-                dbid_lt: parse_quote! { 'dbid_2 },
-                kq_lt: parse_quote! { 'kq_0 },
-                kp_lt: parse_quote! { 'kp_1 },
-                vp_lt: parse_quote! { 'vp_2 },
-            },
-            true,
-        );
-        assert_eq!(
-            quantifier,
-            parse_quote! { for<'env_0, 'txn_1, 'dbid_2, 'kq_0, 'kp_1, 'vp_2,> }
-        );
-    }
-
-    /// Tests the `add_bounds` function.
-    #[test]
-    fn add_bounds_test() {
-        let mut test_case = parse_quote! { fn do_something<E, EC, DC, SC>(env: &mut E) where E: ::std::fmt::Debug {} };
-        let generics = find_generics_mut(&mut test_case).unwrap();
-        add_bounds(
-            generics,
-            &parse_quote! { E, EC, DC, SC, crate },
-            &BoundsLifetimeNames {
-                env_lt: parse_quote! { 'env },
-                txn_lt: parse_quote! { 'txn },
-                dbid_lt: parse_quote! { 'dbid },
-                kq_lt: parse_quote! { 'kq },
-                kp_lt: parse_quote! { 'kp },
-                vp_lt: parse_quote! { 'vp },
-            },
-        );
-        assert_eq!(
-            generics.where_clause,
-            Some(parse_quote! {
-                where E: ::std::fmt::Debug,
-                E: 'static + for<'env, 'dbid, 'kq, 'kp, 'vp,> crate::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>,
-                for<'env, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<E as crate::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RoTransaction as crate::Transaction<'txn, &'kq [u8],>>::ReturnedValue: crate::lt_trait_wrappers::AsRefLt6<'env, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
-                for<'env, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<E as crate::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwTransaction as crate::Transaction<'txn, &'kq [u8],>>::ReturnedValue: crate::lt_trait_wrappers::AsRefLt6<'env, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
-                for<'env, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<<E as crate::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RoTransaction as crate::Transaction<'txn, &'kq [u8],>>::RoCursor as crate::CursorBasic>::ReturnedKey: crate::lt_trait_wrappers::AsRefLt6<'env, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
-                for<'env, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<<E as crate::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RoTransaction as crate::Transaction<'txn, &'kq [u8],>>::RoCursor as crate::CursorBasic>::ReturnedValue: crate::lt_trait_wrappers::AsRefLt6<'env, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
-                for<'env, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<<E as crate::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwTransaction as crate::Transaction<'txn, &'kq [u8],>>::RoCursor as crate::CursorBasic>::ReturnedKey: crate::lt_trait_wrappers::AsRefLt6<'env, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
-                for<'env, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<<E as crate::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwTransaction as crate::Transaction<'txn, &'kq [u8],>>::RoCursor as crate::CursorBasic>::ReturnedValue: crate::lt_trait_wrappers::AsRefLt6<'env, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
-                for<'env, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<<E as crate::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwTransaction as crate::ReadWriteTransaction<'txn, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwCursor as crate::CursorBasic>::ReturnedKey: crate::lt_trait_wrappers::AsRefLt6<'env, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
-                for<'env, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<<E as crate::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwTransaction as crate::ReadWriteTransaction<'txn, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwCursor as crate::CursorBasic>::ReturnedValue: crate::lt_trait_wrappers::AsRefLt6<'env, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>
-            })
-        );
-
-        let mut test_case = parse_quote! { fn do_something<E, EC, DC, SC>(env: &mut E) where E: ::std::fmt::Debug {} };
-        let generics = find_generics_mut(&mut test_case).unwrap();
-        add_bounds(
-            generics,
-            &parse_quote! { E, EC, DC, SC },
-            &BoundsLifetimeNames {
-                env_lt: parse_quote! { 'env },
-                txn_lt: parse_quote! { 'txn },
-                dbid_lt: parse_quote! { 'dbid },
-                kq_lt: parse_quote! { 'kq },
-                kp_lt: parse_quote! { 'kp },
-                vp_lt: parse_quote! { 'vp },
-            },
-        );
-        assert_eq!(
-            generics.where_clause,
-            Some(parse_quote! {
-                where E: ::std::fmt::Debug,
-                E: 'static + for<'env, 'dbid, 'kq, 'kp, 'vp,> ::atelier_kv_store::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>,
-                for<'env, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<E as ::atelier_kv_store::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RoTransaction as ::atelier_kv_store::Transaction<'txn, &'kq [u8],>>::ReturnedValue: ::atelier_kv_store::lt_trait_wrappers::AsRefLt6<'env, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
-                for<'env, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<E as ::atelier_kv_store::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwTransaction as ::atelier_kv_store::Transaction<'txn, &'kq [u8],>>::ReturnedValue: ::atelier_kv_store::lt_trait_wrappers::AsRefLt6<'env, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
-                for<'env, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<<E as ::atelier_kv_store::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RoTransaction as ::atelier_kv_store::Transaction<'txn, &'kq [u8],>>::RoCursor as ::atelier_kv_store::CursorBasic>::ReturnedKey: ::atelier_kv_store::lt_trait_wrappers::AsRefLt6<'env, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
-                for<'env, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<<E as ::atelier_kv_store::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RoTransaction as ::atelier_kv_store::Transaction<'txn, &'kq [u8],>>::RoCursor as ::atelier_kv_store::CursorBasic>::ReturnedValue: ::atelier_kv_store::lt_trait_wrappers::AsRefLt6<'env, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
-                for<'env, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<<E as ::atelier_kv_store::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwTransaction as ::atelier_kv_store::Transaction<'txn, &'kq [u8],>>::RoCursor as ::atelier_kv_store::CursorBasic>::ReturnedKey: ::atelier_kv_store::lt_trait_wrappers::AsRefLt6<'env, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
-                for<'env, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<<E as ::atelier_kv_store::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwTransaction as ::atelier_kv_store::Transaction<'txn, &'kq [u8],>>::RoCursor as ::atelier_kv_store::CursorBasic>::ReturnedValue: ::atelier_kv_store::lt_trait_wrappers::AsRefLt6<'env, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
-                for<'env, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<<E as ::atelier_kv_store::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwTransaction as ::atelier_kv_store::ReadWriteTransaction<'txn, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwCursor as ::atelier_kv_store::CursorBasic>::ReturnedKey: ::atelier_kv_store::lt_trait_wrappers::AsRefLt6<'env, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
-                for<'env, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<<E as ::atelier_kv_store::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwTransaction as ::atelier_kv_store::ReadWriteTransaction<'txn, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwCursor as ::atelier_kv_store::CursorBasic>::ReturnedValue: ::atelier_kv_store::lt_trait_wrappers::AsRefLt6<'env, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>
-            })
-        );
-    }
-
-    /// Tests the `require_binary_static_env_internal` function.
-    #[test]
-    fn require_binary_static_env_internal_test() {
-        let test_output: Item = parse2(
-            require_binary_static_env_internal(
-                parse_quote! { E, EC, DC, SC, crate },
-                parse_quote! { fn do_something<E, EC, DC, SC>(env: &mut E) {} },
-            )
-            .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(
-            test_output,
-            parse_quote! {
-                fn do_something<E, EC, DC, SC>(env: &mut E) where
-                    E: 'static + for<'env, 'dbid, 'kq, 'kp, 'vp,> crate::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>,
-                    for<'env, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<E as crate::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RoTransaction as crate::Transaction<'txn, &'kq [u8],>>::ReturnedValue: crate::lt_trait_wrappers::AsRefLt6<'env, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
-                    for<'env, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<E as crate::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwTransaction as crate::Transaction<'txn, &'kq [u8],>>::ReturnedValue: crate::lt_trait_wrappers::AsRefLt6<'env, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
-                    for<'env, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<<E as crate::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RoTransaction as crate::Transaction<'txn, &'kq [u8],>>::RoCursor as crate::CursorBasic>::ReturnedKey: crate::lt_trait_wrappers::AsRefLt6<'env, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
-                    for<'env, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<<E as crate::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RoTransaction as crate::Transaction<'txn, &'kq [u8],>>::RoCursor as crate::CursorBasic>::ReturnedValue: crate::lt_trait_wrappers::AsRefLt6<'env, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
-                    for<'env, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<<E as crate::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwTransaction as crate::Transaction<'txn, &'kq [u8],>>::RoCursor as crate::CursorBasic>::ReturnedKey: crate::lt_trait_wrappers::AsRefLt6<'env, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
-                    for<'env, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<<E as crate::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwTransaction as crate::Transaction<'txn, &'kq [u8],>>::RoCursor as crate::CursorBasic>::ReturnedValue: crate::lt_trait_wrappers::AsRefLt6<'env, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
-                    for<'env, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<<E as crate::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwTransaction as crate::ReadWriteTransaction<'txn, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwCursor as crate::CursorBasic>::ReturnedKey: crate::lt_trait_wrappers::AsRefLt6<'env, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
-                    for<'env, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<<E as crate::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwTransaction as crate::ReadWriteTransaction<'txn, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwCursor as crate::CursorBasic>::ReturnedValue: crate::lt_trait_wrappers::AsRefLt6<'env, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>
-                {}
-            }
-        );
-
-        let test_output: Item = parse2(require_binary_static_env_internal(
-            parse_quote! { E, EC, DC, SC, crate },
-            parse_quote! { fn do_something<E, EC, DC, SC>(env: &mut E) where E: ::std::fmt::Debug {} },
-        ).unwrap()).unwrap();
-        assert_eq!(
-            test_output,
-            parse_quote! {
-                fn do_something<E, EC, DC, SC>(env: &mut E) where
-                    E: ::std::fmt::Debug,
-                    E: 'static + for<'env, 'dbid, 'kq, 'kp, 'vp,> crate::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>,
-                    for<'env, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<E as crate::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RoTransaction as crate::Transaction<'txn, &'kq [u8],>>::ReturnedValue: crate::lt_trait_wrappers::AsRefLt6<'env, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
-                    for<'env, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<E as crate::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwTransaction as crate::Transaction<'txn, &'kq [u8],>>::ReturnedValue: crate::lt_trait_wrappers::AsRefLt6<'env, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
-                    for<'env, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<<E as crate::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RoTransaction as crate::Transaction<'txn, &'kq [u8],>>::RoCursor as crate::CursorBasic>::ReturnedKey: crate::lt_trait_wrappers::AsRefLt6<'env, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
-                    for<'env, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<<E as crate::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RoTransaction as crate::Transaction<'txn, &'kq [u8],>>::RoCursor as crate::CursorBasic>::ReturnedValue: crate::lt_trait_wrappers::AsRefLt6<'env, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
-                    for<'env, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<<E as crate::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwTransaction as crate::Transaction<'txn, &'kq [u8],>>::RoCursor as crate::CursorBasic>::ReturnedKey: crate::lt_trait_wrappers::AsRefLt6<'env, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
-                    for<'env, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<<E as crate::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwTransaction as crate::Transaction<'txn, &'kq [u8],>>::RoCursor as crate::CursorBasic>::ReturnedValue: crate::lt_trait_wrappers::AsRefLt6<'env, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
-                    for<'env, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<<E as crate::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwTransaction as crate::ReadWriteTransaction<'txn, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwCursor as crate::CursorBasic>::ReturnedKey: crate::lt_trait_wrappers::AsRefLt6<'env, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
-                    for<'env, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<<E as crate::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwTransaction as crate::ReadWriteTransaction<'txn, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwCursor as crate::CursorBasic>::ReturnedValue: crate::lt_trait_wrappers::AsRefLt6<'env, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>
-                {}
-            }
-        );
-
-        let test_output: Item = parse2(require_binary_static_env_internal(
-            parse_quote! { E, EC, DC, SC },
-            parse_quote! { fn do_something<E, EC, DC, SC>(env: &mut E) where E: ::std::fmt::Debug {} },
-        ).unwrap()).unwrap();
-        assert_eq!(
-            test_output,
-            parse_quote! {
-                fn do_something<E, EC, DC, SC>(env: &mut E) where
-                    E: ::std::fmt::Debug,
-                    E: 'static + for<'env, 'dbid, 'kq, 'kp, 'vp,> ::atelier_kv_store::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>,
-                    for<'env, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<E as ::atelier_kv_store::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RoTransaction as ::atelier_kv_store::Transaction<'txn, &'kq [u8],>>::ReturnedValue: ::atelier_kv_store::lt_trait_wrappers::AsRefLt6<'env, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
-                    for<'env, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<E as ::atelier_kv_store::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwTransaction as ::atelier_kv_store::Transaction<'txn, &'kq [u8],>>::ReturnedValue: ::atelier_kv_store::lt_trait_wrappers::AsRefLt6<'env, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
-                    for<'env, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<<E as ::atelier_kv_store::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RoTransaction as ::atelier_kv_store::Transaction<'txn, &'kq [u8],>>::RoCursor as ::atelier_kv_store::CursorBasic>::ReturnedKey: ::atelier_kv_store::lt_trait_wrappers::AsRefLt6<'env, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
-                    for<'env, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<<E as ::atelier_kv_store::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RoTransaction as ::atelier_kv_store::Transaction<'txn, &'kq [u8],>>::RoCursor as ::atelier_kv_store::CursorBasic>::ReturnedValue: ::atelier_kv_store::lt_trait_wrappers::AsRefLt6<'env, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
-                    for<'env, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<<E as ::atelier_kv_store::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwTransaction as ::atelier_kv_store::Transaction<'txn, &'kq [u8],>>::RoCursor as ::atelier_kv_store::CursorBasic>::ReturnedKey: ::atelier_kv_store::lt_trait_wrappers::AsRefLt6<'env, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
-                    for<'env, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<<E as ::atelier_kv_store::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwTransaction as ::atelier_kv_store::Transaction<'txn, &'kq [u8],>>::RoCursor as ::atelier_kv_store::CursorBasic>::ReturnedValue: ::atelier_kv_store::lt_trait_wrappers::AsRefLt6<'env, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
-                    for<'env, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<<E as ::atelier_kv_store::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwTransaction as ::atelier_kv_store::ReadWriteTransaction<'txn, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwCursor as ::atelier_kv_store::CursorBasic>::ReturnedKey: ::atelier_kv_store::lt_trait_wrappers::AsRefLt6<'env, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
-                    for<'env, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<<E as ::atelier_kv_store::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwTransaction as ::atelier_kv_store::ReadWriteTransaction<'txn, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwCursor as ::atelier_kv_store::CursorBasic>::ReturnedValue: ::atelier_kv_store::lt_trait_wrappers::AsRefLt6<'env, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>
-                {}
-            }
-        );
-
-        require_binary_static_env_internal(
-            parse_quote! { E, EC, DC },
-            parse_quote! { fn do_something<E, EC, DC, DC>(env: &mut E) where E: ::std::fmt::Debug {} },
-        )
-        .unwrap_err();
-
-        require_binary_static_env_internal(
-            parse_quote! { E, EC, DC, SC, self, X },
-            parse_quote! { fn do_something<E, EC, DC, SC>(env: &mut E) where E: ::std::fmt::Debug {} },
-        )
-        .unwrap_err();
-
-        require_binary_static_env_internal(
-            parse_quote! { E, EC, DC, SC },
-            parse_quote! { const X: u32 = 0; },
-        )
-        .unwrap_err();
-    }
-
     /// Tests the `require_binary_static_env` function.
     #[test]
     fn require_binary_static_env_test() {
@@ -731,7 +395,7 @@ mod tests {
         );
 
         let test_output: Item = parse2(require_binary_static_env(
-            parse_quote! { E, EC, DC, SC, crate },
+            parse_quote! { &'env E, EC, DC, SC, crate },
             parse_quote! { fn do_something<E, EC, DC, SC>(env: &mut E) where E: ::std::fmt::Debug {} },
         )).unwrap();
         assert_eq!(
@@ -739,15 +403,15 @@ mod tests {
             parse_quote! {
                 fn do_something<E, EC, DC, SC>(env: &mut E) where
                     E: ::std::fmt::Debug,
-                    E: 'static + for<'env, 'dbid, 'kq, 'kp, 'vp,> crate::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>,
-                    for<'env, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<E as crate::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RoTransaction as crate::Transaction<'txn, &'kq [u8],>>::ReturnedValue: crate::lt_trait_wrappers::AsRefLt6<'env, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
-                    for<'env, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<E as crate::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwTransaction as crate::Transaction<'txn, &'kq [u8],>>::ReturnedValue: crate::lt_trait_wrappers::AsRefLt6<'env, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
-                    for<'env, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<<E as crate::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RoTransaction as crate::Transaction<'txn, &'kq [u8],>>::RoCursor as crate::CursorBasic>::ReturnedKey: crate::lt_trait_wrappers::AsRefLt6<'env, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
-                    for<'env, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<<E as crate::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RoTransaction as crate::Transaction<'txn, &'kq [u8],>>::RoCursor as crate::CursorBasic>::ReturnedValue: crate::lt_trait_wrappers::AsRefLt6<'env, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
-                    for<'env, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<<E as crate::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwTransaction as crate::Transaction<'txn, &'kq [u8],>>::RoCursor as crate::CursorBasic>::ReturnedKey: crate::lt_trait_wrappers::AsRefLt6<'env, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
-                    for<'env, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<<E as crate::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwTransaction as crate::Transaction<'txn, &'kq [u8],>>::RoCursor as crate::CursorBasic>::ReturnedValue: crate::lt_trait_wrappers::AsRefLt6<'env, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
-                    for<'env, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<<E as crate::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwTransaction as crate::ReadWriteTransaction<'txn, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwCursor as crate::CursorBasic>::ReturnedKey: crate::lt_trait_wrappers::AsRefLt6<'env, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
-                    for<'env, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<<E as crate::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwTransaction as crate::ReadWriteTransaction<'txn, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwCursor as crate::CursorBasic>::ReturnedValue: crate::lt_trait_wrappers::AsRefLt6<'env, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>
+                    &'env E: 'static + for<'env_0, 'dbid, 'kq, 'kp, 'vp,> crate::Environment<'env_0, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>,
+                    for<'env_0, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<&'env E as crate::Environment<'env_0, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RoTransaction as crate::Transaction<'txn, &'kq [u8],>>::ReturnedValue: crate::lt_trait_wrappers::AsRefLt6<'env_0, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
+                    for<'env_0, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<&'env E as crate::Environment<'env_0, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwTransaction as crate::Transaction<'txn, &'kq [u8],>>::ReturnedValue: crate::lt_trait_wrappers::AsRefLt6<'env_0, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
+                    for<'env_0, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<<&'env E as crate::Environment<'env_0, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RoTransaction as crate::Transaction<'txn, &'kq [u8],>>::RoCursor as crate::CursorBasic>::ReturnedKey: crate::lt_trait_wrappers::AsRefLt6<'env_0, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
+                    for<'env_0, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<<&'env E as crate::Environment<'env_0, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RoTransaction as crate::Transaction<'txn, &'kq [u8],>>::RoCursor as crate::CursorBasic>::ReturnedValue: crate::lt_trait_wrappers::AsRefLt6<'env_0, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
+                    for<'env_0, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<<&'env E as crate::Environment<'env_0, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwTransaction as crate::Transaction<'txn, &'kq [u8],>>::RoCursor as crate::CursorBasic>::ReturnedKey: crate::lt_trait_wrappers::AsRefLt6<'env_0, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
+                    for<'env_0, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<<&'env E as crate::Environment<'env_0, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwTransaction as crate::Transaction<'txn, &'kq [u8],>>::RoCursor as crate::CursorBasic>::ReturnedValue: crate::lt_trait_wrappers::AsRefLt6<'env_0, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
+                    for<'env_0, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<<&'env E as crate::Environment<'env_0, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwTransaction as crate::ReadWriteTransaction<'txn, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwCursor as crate::CursorBasic>::ReturnedKey: crate::lt_trait_wrappers::AsRefLt6<'env_0, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
+                    for<'env_0, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<<&'env E as crate::Environment<'env_0, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwTransaction as crate::ReadWriteTransaction<'txn, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwCursor as crate::CursorBasic>::ReturnedValue: crate::lt_trait_wrappers::AsRefLt6<'env_0, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>
                 {}
             }
         );

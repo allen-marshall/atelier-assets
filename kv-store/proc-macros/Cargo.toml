@@ -16,3 +16,4 @@ proc-macro2 = "1.0"
 
 [dev-dependencies]
 atelier-kv-store = { path = ".." }
+trybuild = "1.0"

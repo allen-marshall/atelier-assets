@@ -1,0 +1,5 @@
+error: Expected at most 2 arguments, got 3.
+ --> $DIR/test_2.rs:5:22
+  |
+5 | #[require_binary_txn(T, self, X)]
+  |                      ^^^^^^^^^^

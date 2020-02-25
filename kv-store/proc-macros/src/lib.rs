@@ -394,17 +394,23 @@ where
 
     // Make sure we have the right number of arguments.
     if punctuated_args.len() < T::NUM_MANDATORY_ARGS {
-        Err(input.error(format!(
-            "Expected at least {} arguments, got {}.",
-            T::NUM_MANDATORY_ARGS,
-            punctuated_args.len()
-        )))
+        Err(syn::Error::new_spanned(
+            &punctuated_args,
+            format!(
+                "Expected at least {} arguments, got {}.",
+                T::NUM_MANDATORY_ARGS,
+                punctuated_args.len()
+            ),
+        ))
     } else if punctuated_args.len() > T::NUM_MANDATORY_ARGS + T::NUM_OPTIONAL_ARGS {
-        Err(input.error(format!(
-            "Expected at most {} arguments, got {}.",
-            T::NUM_MANDATORY_ARGS + T::NUM_OPTIONAL_ARGS,
-            punctuated_args.len()
-        )))
+        Err(syn::Error::new_spanned(
+            &punctuated_args,
+            format!(
+                "Expected at most {} arguments, got {}.",
+                T::NUM_MANDATORY_ARGS + T::NUM_OPTIONAL_ARGS,
+                punctuated_args.len()
+            ),
+        ))
     } else {
         // Separate the mandatory and optional args, and apply default values
         // for any optional args that aren't specified.
@@ -812,5 +818,12 @@ mod tests {
             vec![parse_quote! { Self: T1 }],
             &parse_quote! { fn do_something<A, B>() where A: T0, Self: T1 {} },
         );
+    }
+
+    /// Tests cases where compilation should fail.
+    #[test]
+    fn build_fail_test() {
+        let build_tester = trybuild::TestCases::new();
+        build_tester.compile_fail("build_fail_tests/**/*.rs");
     }
 }
