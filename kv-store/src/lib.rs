@@ -153,6 +153,9 @@ pub trait TransactionBasic {
 
     /// Handle to an open database.
     type Database;
+
+    /// Type of value data returned from lookup operations.
+    type ReturnedValue: ?Sized;
 }
 
 /// Trait for transaction handles.
@@ -176,7 +179,7 @@ pub trait Transaction<'txn, KQ>: Sized + TransactionBasic {
     type ReturnedDbConfig;
 
     /// Value object type returned from lookup operations.
-    type ReturnedValue;
+    type ReturnedValueHandle: 'txn + AsRef<Self::ReturnedValue>;
 
     /// Read-only cursor that can be opened within the transaction.
     type RoCursor: 'txn + CursorBasic<Error = Self::Error> + for<'cursor> Cursor<'cursor, KQ>;
@@ -208,7 +211,7 @@ pub trait Transaction<'txn, KQ>: Sized + TransactionBasic {
         &'txn self,
         db: &Self::Database,
         key: KQ,
-    ) -> Result<Option<Self::ReturnedValue>, Self::Error>
+    ) -> Result<Option<Self::ReturnedValueHandle>, Self::Error>
     where
         Self: 'txn;
 
@@ -241,7 +244,11 @@ pub trait ReadWriteTransaction<'txn, KQ, KP, VP>: Transaction<'txn, KQ> {
     /// Child transaction that can be created from the parent read-write
     /// transaction.
     type Nested: 'txn
-        + TransactionBasic<Error = Self::Error, Database = Self::Database>
+        + TransactionBasic<
+            Error = Self::Error,
+            Database = Self::Database,
+            ReturnedValue = Self::ReturnedValue,
+        >
         + for<'child_txn> ReadWriteTransaction<'child_txn, KQ, KP, VP>;
 
     /// Stores the specified key-value pair in the specified database. If the

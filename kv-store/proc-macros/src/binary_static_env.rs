@@ -88,6 +88,16 @@ fn env_trait_bound(
     }
 }
 
+/// Gets the [`TransactionBasic`][TransactionBasic] trait bound to use for
+/// transaction types.
+///
+/// [TransactionBasic]: atelier_kv_store::TransactionBasic
+fn txn_basic_trait_bound(crate_root_path: &syn::Path) -> TypeParamBound {
+    parse_quote! {
+        #crate_root_path::TransactionBasic
+    }
+}
+
 /// Gets the [`Transaction`][Transaction] trait bound to use for transaction
 /// types.
 ///
@@ -282,6 +292,26 @@ mod tests {
                     &'kp_0 [u8],
                     &'vp_1 [u8],
                 >
+            }
+        );
+    }
+
+    /// Tests the `txn_basic_trait_bound` function.
+    #[test]
+    fn txn_basic_trait_bound_test() {
+        let bound = txn_basic_trait_bound(&parse_quote! { crate });
+        assert_eq!(
+            bound,
+            parse_quote! {
+                crate::TransactionBasic
+            }
+        );
+
+        let bound = txn_basic_trait_bound(&parse_quote! { ::atelier_kv_store });
+        assert_eq!(
+            bound,
+            parse_quote! {
+                ::atelier_kv_store::TransactionBasic
             }
         );
     }

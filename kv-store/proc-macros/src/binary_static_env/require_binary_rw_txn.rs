@@ -4,7 +4,8 @@
 //! [require_binary_rw_txn]: crate::require_binary_rw_txn
 
 use crate::binary_static_env::{
-    cursor_basic_trait_bound, rw_txn_trait_bound, txn_trait_bound, TypeAndCrateRootArgs,
+    cursor_basic_trait_bound, rw_txn_trait_bound, txn_basic_trait_bound, txn_trait_bound,
+    TypeAndCrateRootArgs,
 };
 use crate::{
     add_where_predicates, find_generics_mut, remove_ident_name_conflicts, LifetimeNameFinder,
@@ -95,6 +96,7 @@ pub(crate) fn require_binary_rw_txn(attr: TokenStream, item: TokenStream) -> Tok
         );
 
         let lt_quant: BoundLifetimes = parse_quote! { for<#txn_lt, #kq_lt, #kp_lt, #vp_lt,> };
+        let txn_basic_trait = txn_basic_trait_bound(&args.crate_root_path);
         let txn_trait = txn_trait_bound(&lt_names.txn_lt, &lt_names.kq_lt, &args.crate_root_path);
         let cursor_basic_trait = cursor_basic_trait_bound(&args.crate_root_path);
         let rw_txn_trait = rw_txn_trait_bound(
@@ -117,7 +119,7 @@ pub(crate) fn require_binary_rw_txn(attr: TokenStream, item: TokenStream) -> Tok
                     #lt_quant #txn_type: #rw_txn_trait
                 },
                 parse_quote! {
-                    #lt_quant <#txn_type as #txn_trait>::ReturnedValue: #as_ref_trait
+                    <#txn_type as #txn_basic_trait>::ReturnedValue: ::std::convert::AsRef<[u8]>
                 },
                 parse_quote! {
                     #lt_quant <<#txn_type as #txn_trait>::RoCursor as #cursor_basic_trait>::ReturnedKey: #as_ref_trait
@@ -208,7 +210,7 @@ mod tests {
             parse_quote! {
                 fn do_something<T>(txn: &mut T) where
                     for<'txn, 'kq, 'kp, 'vp,> T: crate::ReadWriteTransaction<'txn, &'kq [u8], &'kp [u8], &'vp [u8],>,
-                    for<'txn, 'kq, 'kp, 'vp,> <T as crate::Transaction<'txn, &'kq [u8],>>::ReturnedValue: crate::lt_trait_wrappers::AsRefLt4<'txn, 'kq, 'kp, 'vp, [u8],>,
+                    <T as crate::TransactionBasic>::ReturnedValue: ::std::convert::AsRef<[u8]>,
                     for<'txn, 'kq, 'kp, 'vp,> <<T as crate::Transaction<'txn, &'kq [u8],>>::RoCursor as crate::CursorBasic>::ReturnedKey: crate::lt_trait_wrappers::AsRefLt4<'txn, 'kq, 'kp, 'vp, [u8],>,
                     for<'txn, 'kq, 'kp, 'vp,> <<T as crate::Transaction<'txn, &'kq [u8],>>::RoCursor as crate::CursorBasic>::ReturnedValue: crate::lt_trait_wrappers::AsRefLt4<'txn, 'kq, 'kp, 'vp, [u8],>,
                     for<'txn, 'kq, 'kp, 'vp,> <<T as crate::ReadWriteTransaction<'txn, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwCursor as crate::CursorBasic>::ReturnedKey: crate::lt_trait_wrappers::AsRefLt4<'txn, 'kq, 'kp, 'vp, [u8],>,
@@ -228,7 +230,7 @@ mod tests {
                 fn do_something<T>(txn: &mut T) where
                     T: ::std::fmt::Debug,
                     for<'txn_0, 'kq, 'kp, 'vp,> &'txn T: crate::ReadWriteTransaction<'txn_0, &'kq [u8], &'kp [u8], &'vp [u8],>,
-                    for<'txn_0, 'kq, 'kp, 'vp,> <&'txn T as crate::Transaction<'txn_0, &'kq [u8],>>::ReturnedValue: crate::lt_trait_wrappers::AsRefLt4<'txn_0, 'kq, 'kp, 'vp, [u8],>,
+                    <&'txn T as crate::TransactionBasic>::ReturnedValue: ::std::convert::AsRef<[u8]>,
                     for<'txn_0, 'kq, 'kp, 'vp,> <<&'txn T as crate::Transaction<'txn_0, &'kq [u8],>>::RoCursor as crate::CursorBasic>::ReturnedKey: crate::lt_trait_wrappers::AsRefLt4<'txn_0, 'kq, 'kp, 'vp, [u8],>,
                     for<'txn_0, 'kq, 'kp, 'vp,> <<&'txn T as crate::Transaction<'txn_0, &'kq [u8],>>::RoCursor as crate::CursorBasic>::ReturnedValue: crate::lt_trait_wrappers::AsRefLt4<'txn_0, 'kq, 'kp, 'vp, [u8],>,
                     for<'txn_0, 'kq, 'kp, 'vp,> <<&'txn T as crate::ReadWriteTransaction<'txn_0, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwCursor as crate::CursorBasic>::ReturnedKey: crate::lt_trait_wrappers::AsRefLt4<'txn_0, 'kq, 'kp, 'vp, [u8],>,
@@ -248,7 +250,7 @@ mod tests {
                 fn do_something<T>(txn: &mut T) where
                     T: ::std::fmt::Debug,
                     for<'txn, 'kq, 'kp, 'vp,> T: ::atelier_kv_store::ReadWriteTransaction<'txn, &'kq [u8], &'kp [u8], &'vp [u8],>,
-                    for<'txn, 'kq, 'kp, 'vp,> <T as ::atelier_kv_store::Transaction<'txn, &'kq [u8],>>::ReturnedValue: ::atelier_kv_store::lt_trait_wrappers::AsRefLt4<'txn, 'kq, 'kp, 'vp, [u8],>,
+                    <T as ::atelier_kv_store::TransactionBasic>::ReturnedValue: ::std::convert::AsRef<[u8]>,
                     for<'txn, 'kq, 'kp, 'vp,> <<T as ::atelier_kv_store::Transaction<'txn, &'kq [u8],>>::RoCursor as ::atelier_kv_store::CursorBasic>::ReturnedKey: ::atelier_kv_store::lt_trait_wrappers::AsRefLt4<'txn, 'kq, 'kp, 'vp, [u8],>,
                     for<'txn, 'kq, 'kp, 'vp,> <<T as ::atelier_kv_store::Transaction<'txn, &'kq [u8],>>::RoCursor as ::atelier_kv_store::CursorBasic>::ReturnedValue: ::atelier_kv_store::lt_trait_wrappers::AsRefLt4<'txn, 'kq, 'kp, 'vp, [u8],>,
                     for<'txn, 'kq, 'kp, 'vp,> <<T as ::atelier_kv_store::ReadWriteTransaction<'txn, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwCursor as ::atelier_kv_store::CursorBasic>::ReturnedKey: ::atelier_kv_store::lt_trait_wrappers::AsRefLt4<'txn, 'kq, 'kp, 'vp, [u8],>,

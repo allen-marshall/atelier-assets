@@ -4,7 +4,8 @@
 //! [require_binary_static_env]: crate::require_binary_static_env
 
 use crate::binary_static_env::{
-    cursor_basic_trait_bound, env_trait_bound, rw_txn_trait_bound, txn_trait_bound,
+    cursor_basic_trait_bound, env_trait_bound, rw_txn_trait_bound, txn_basic_trait_bound,
+    txn_trait_bound,
 };
 use crate::{
     add_where_predicates, find_generics_mut, parse_macro_args, remove_ident_name_conflicts,
@@ -183,6 +184,7 @@ pub(crate) fn require_binary_static_env(attr: TokenStream, item: TokenStream) ->
             &args.sync_cfg_type,
             &args.crate_root_path,
         );
+        let txn_basic_trait = txn_basic_trait_bound(&args.crate_root_path);
         let txn_trait = txn_trait_bound(&lt_names.txn_lt, &lt_names.kq_lt, &args.crate_root_path);
         let rw_txn_trait = rw_txn_trait_bound(
             &lt_names.txn_lt,
@@ -205,10 +207,10 @@ pub(crate) fn require_binary_static_env(attr: TokenStream, item: TokenStream) ->
                     #env_type: 'static + #lt_quant_env #env_trait
                 },
                 parse_quote! {
-                    #lt_quant_txn <<#env_type as #env_trait>::RoTransaction as #txn_trait>::ReturnedValue: #as_ref_trait
+                    #lt_quant_txn <<#env_type as #env_trait>::RoTransaction as #txn_basic_trait>::ReturnedValue: #as_ref_trait
                 },
                 parse_quote! {
-                    #lt_quant_txn <<#env_type as #env_trait>::RwTransaction as #txn_trait>::ReturnedValue: #as_ref_trait
+                    #lt_quant_txn <<#env_type as #env_trait>::RwTransaction as #txn_basic_trait>::ReturnedValue: #as_ref_trait
                 },
                 parse_quote! {
                     #lt_quant_txn <<<#env_type as #env_trait>::RoTransaction as #txn_trait>::RoCursor as #cursor_basic_trait>::ReturnedKey: #as_ref_trait
@@ -382,8 +384,8 @@ mod tests {
             parse_quote! {
                 fn do_something<E, EC, DC, SC>(env: &mut E) where
                     E: 'static + for<'env, 'dbid, 'kq, 'kp, 'vp,> crate::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>,
-                    for<'env, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<E as crate::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RoTransaction as crate::Transaction<'txn, &'kq [u8],>>::ReturnedValue: crate::lt_trait_wrappers::AsRefLt6<'env, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
-                    for<'env, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<E as crate::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwTransaction as crate::Transaction<'txn, &'kq [u8],>>::ReturnedValue: crate::lt_trait_wrappers::AsRefLt6<'env, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
+                    for<'env, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<E as crate::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RoTransaction as crate::TransactionBasic>::ReturnedValue: crate::lt_trait_wrappers::AsRefLt6<'env, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
+                    for<'env, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<E as crate::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwTransaction as crate::TransactionBasic>::ReturnedValue: crate::lt_trait_wrappers::AsRefLt6<'env, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
                     for<'env, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<<E as crate::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RoTransaction as crate::Transaction<'txn, &'kq [u8],>>::RoCursor as crate::CursorBasic>::ReturnedKey: crate::lt_trait_wrappers::AsRefLt6<'env, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
                     for<'env, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<<E as crate::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RoTransaction as crate::Transaction<'txn, &'kq [u8],>>::RoCursor as crate::CursorBasic>::ReturnedValue: crate::lt_trait_wrappers::AsRefLt6<'env, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
                     for<'env, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<<E as crate::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwTransaction as crate::Transaction<'txn, &'kq [u8],>>::RoCursor as crate::CursorBasic>::ReturnedKey: crate::lt_trait_wrappers::AsRefLt6<'env, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
@@ -404,8 +406,8 @@ mod tests {
                 fn do_something<E, EC, DC, SC>(env: &mut E) where
                     E: ::std::fmt::Debug,
                     &'env E: 'static + for<'env_0, 'dbid, 'kq, 'kp, 'vp,> crate::Environment<'env_0, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>,
-                    for<'env_0, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<&'env E as crate::Environment<'env_0, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RoTransaction as crate::Transaction<'txn, &'kq [u8],>>::ReturnedValue: crate::lt_trait_wrappers::AsRefLt6<'env_0, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
-                    for<'env_0, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<&'env E as crate::Environment<'env_0, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwTransaction as crate::Transaction<'txn, &'kq [u8],>>::ReturnedValue: crate::lt_trait_wrappers::AsRefLt6<'env_0, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
+                    for<'env_0, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<&'env E as crate::Environment<'env_0, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RoTransaction as crate::TransactionBasic>::ReturnedValue: crate::lt_trait_wrappers::AsRefLt6<'env_0, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
+                    for<'env_0, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<&'env E as crate::Environment<'env_0, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwTransaction as crate::TransactionBasic>::ReturnedValue: crate::lt_trait_wrappers::AsRefLt6<'env_0, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
                     for<'env_0, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<<&'env E as crate::Environment<'env_0, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RoTransaction as crate::Transaction<'txn, &'kq [u8],>>::RoCursor as crate::CursorBasic>::ReturnedKey: crate::lt_trait_wrappers::AsRefLt6<'env_0, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
                     for<'env_0, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<<&'env E as crate::Environment<'env_0, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RoTransaction as crate::Transaction<'txn, &'kq [u8],>>::RoCursor as crate::CursorBasic>::ReturnedValue: crate::lt_trait_wrappers::AsRefLt6<'env_0, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
                     for<'env_0, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<<&'env E as crate::Environment<'env_0, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwTransaction as crate::Transaction<'txn, &'kq [u8],>>::RoCursor as crate::CursorBasic>::ReturnedKey: crate::lt_trait_wrappers::AsRefLt6<'env_0, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
@@ -426,8 +428,8 @@ mod tests {
                 fn do_something<E, EC, DC, SC>(env: &mut E) where
                     E: ::std::fmt::Debug,
                     E: 'static + for<'env, 'dbid, 'kq, 'kp, 'vp,> ::atelier_kv_store::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>,
-                    for<'env, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<E as ::atelier_kv_store::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RoTransaction as ::atelier_kv_store::Transaction<'txn, &'kq [u8],>>::ReturnedValue: ::atelier_kv_store::lt_trait_wrappers::AsRefLt6<'env, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
-                    for<'env, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<E as ::atelier_kv_store::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwTransaction as ::atelier_kv_store::Transaction<'txn, &'kq [u8],>>::ReturnedValue: ::atelier_kv_store::lt_trait_wrappers::AsRefLt6<'env, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
+                    for<'env, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<E as ::atelier_kv_store::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RoTransaction as ::atelier_kv_store::TransactionBasic>::ReturnedValue: ::atelier_kv_store::lt_trait_wrappers::AsRefLt6<'env, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
+                    for<'env, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<E as ::atelier_kv_store::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwTransaction as ::atelier_kv_store::TransactionBasic>::ReturnedValue: ::atelier_kv_store::lt_trait_wrappers::AsRefLt6<'env, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
                     for<'env, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<<E as ::atelier_kv_store::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RoTransaction as ::atelier_kv_store::Transaction<'txn, &'kq [u8],>>::RoCursor as ::atelier_kv_store::CursorBasic>::ReturnedKey: ::atelier_kv_store::lt_trait_wrappers::AsRefLt6<'env, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
                     for<'env, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<<E as ::atelier_kv_store::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RoTransaction as ::atelier_kv_store::Transaction<'txn, &'kq [u8],>>::RoCursor as ::atelier_kv_store::CursorBasic>::ReturnedValue: ::atelier_kv_store::lt_trait_wrappers::AsRefLt6<'env, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,
                     for<'env, 'txn, 'dbid, 'kq, 'kp, 'vp,> <<<E as ::atelier_kv_store::Environment<'env, EC, ::std::option::Option<&'dbid str>, DC, SC, &'kq [u8], &'kp [u8], &'vp [u8],>>::RwTransaction as ::atelier_kv_store::Transaction<'txn, &'kq [u8],>>::RoCursor as ::atelier_kv_store::CursorBasic>::ReturnedKey: ::atelier_kv_store::lt_trait_wrappers::AsRefLt6<'env, 'txn, 'dbid, 'kq, 'kp, 'vp, [u8],>,

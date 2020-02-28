@@ -3,7 +3,9 @@
 //!
 //! [require_binary_txn]: crate::require_binary_txn
 
-use crate::binary_static_env::{cursor_basic_trait_bound, txn_trait_bound, TypeAndCrateRootArgs};
+use crate::binary_static_env::{
+    cursor_basic_trait_bound, txn_basic_trait_bound, txn_trait_bound, TypeAndCrateRootArgs,
+};
 use crate::{
     add_where_predicates, find_generics_mut, remove_ident_name_conflicts, LifetimeNameFinder,
 };
@@ -78,6 +80,7 @@ pub(crate) fn require_binary_txn(attr: TokenStream, item: TokenStream) -> TokenS
         );
 
         let lt_quant: BoundLifetimes = parse_quote! { for<#txn_lt, #kq_lt,> };
+        let txn_basic_trait = txn_basic_trait_bound(&args.crate_root_path);
         let txn_trait = txn_trait_bound(&lt_names.txn_lt, &lt_names.kq_lt, &args.crate_root_path);
         let cursor_basic_trait = cursor_basic_trait_bound(&args.crate_root_path);
         let as_ref_trait: TypeParamBound = parse_quote! {
@@ -97,7 +100,7 @@ pub(crate) fn require_binary_txn(attr: TokenStream, item: TokenStream) -> TokenS
                     #lt_quant #txn_type: #txn_trait
                 },
                 parse_quote! {
-                    #lt_quant <#txn_type as #txn_trait>::ReturnedValue: #as_ref_trait
+                    <#txn_type as #txn_basic_trait>::ReturnedValue: ::std::convert::AsRef<[u8]>
                 },
                 parse_quote! {
                     #lt_quant <<#txn_type as #txn_trait>::RoCursor as #cursor_basic_trait>::ReturnedKey: #as_ref_trait
@@ -173,7 +176,7 @@ mod tests {
             parse_quote! {
                 fn do_something<T>(txn: &mut T) where
                     for<'txn, 'kq,> T: crate::Transaction<'txn, &'kq [u8],>,
-                    for<'txn, 'kq,> <T as crate::Transaction<'txn, &'kq [u8],>>::ReturnedValue: crate::lt_trait_wrappers::AsRefLt2<'txn, 'kq, [u8],>,
+                    <T as crate::TransactionBasic>::ReturnedValue: ::std::convert::AsRef<[u8]>,
                     for<'txn, 'kq,> <<T as crate::Transaction<'txn, &'kq [u8],>>::RoCursor as crate::CursorBasic>::ReturnedKey: crate::lt_trait_wrappers::AsRefLt2<'txn, 'kq, [u8],>,
                     for<'txn, 'kq,> <<T as crate::Transaction<'txn, &'kq [u8],>>::RoCursor as crate::CursorBasic>::ReturnedValue: crate::lt_trait_wrappers::AsRefLt2<'txn, 'kq, [u8],>
                 {}
@@ -191,7 +194,7 @@ mod tests {
                 fn do_something<T>(txn: &mut T) where
                     T: ::std::fmt::Debug,
                     for<'txn_0, 'kq,> &'txn T: crate::Transaction<'txn_0, &'kq [u8],>,
-                    for<'txn_0, 'kq,> <&'txn T as crate::Transaction<'txn_0, &'kq [u8],>>::ReturnedValue: crate::lt_trait_wrappers::AsRefLt2<'txn_0, 'kq, [u8],>,
+                     <&'txn T as crate::TransactionBasic>::ReturnedValue: ::std::convert::AsRef<[u8]>,
                     for<'txn_0, 'kq,> <<&'txn T as crate::Transaction<'txn_0, &'kq [u8],>>::RoCursor as crate::CursorBasic>::ReturnedKey: crate::lt_trait_wrappers::AsRefLt2<'txn_0, 'kq, [u8],>,
                     for<'txn_0, 'kq,> <<&'txn T as crate::Transaction<'txn_0, &'kq [u8],>>::RoCursor as crate::CursorBasic>::ReturnedValue: crate::lt_trait_wrappers::AsRefLt2<'txn_0, 'kq, [u8],>
                 {}
@@ -209,7 +212,7 @@ mod tests {
                 fn do_something<T>(txn: &mut T) where
                     T: ::std::fmt::Debug,
                     for<'txn, 'kq,> T: ::atelier_kv_store::Transaction<'txn, &'kq [u8],>,
-                    for<'txn, 'kq,> <T as ::atelier_kv_store::Transaction<'txn, &'kq [u8],>>::ReturnedValue: ::atelier_kv_store::lt_trait_wrappers::AsRefLt2<'txn, 'kq, [u8],>,
+                     <T as ::atelier_kv_store::TransactionBasic>::ReturnedValue: ::std::convert::AsRef<[u8]>,
                     for<'txn, 'kq,> <<T as ::atelier_kv_store::Transaction<'txn, &'kq [u8],>>::RoCursor as ::atelier_kv_store::CursorBasic>::ReturnedKey: ::atelier_kv_store::lt_trait_wrappers::AsRefLt2<'txn, 'kq, [u8],>,
                     for<'txn, 'kq,> <<T as ::atelier_kv_store::Transaction<'txn, &'kq [u8],>>::RoCursor as ::atelier_kv_store::CursorBasic>::ReturnedValue: ::atelier_kv_store::lt_trait_wrappers::AsRefLt2<'txn, 'kq, [u8],>
                 {}
