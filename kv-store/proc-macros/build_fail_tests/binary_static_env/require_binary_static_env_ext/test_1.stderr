@@ -1,0 +1,5 @@
+error: Expected at least 4 arguments, got 0.
+ --> $DIR/test_1.rs:5:1
+  |
+5 | #[require_binary_static_env_ext()]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -36,16 +36,16 @@ where
 {
 }
 
-/// Wrapper that adds 6 unused lifetime parameters to [`AsRef`][AsRef].
+/// Wrapper that adds 5 unused lifetime parameters to [`AsRef`][AsRef].
 ///
 /// [AsRef]: std::convert::AsRef
-pub trait AsRefLt6<'lt0, 'lt1, 'lt2, 'lt3, 'lt4, 'lt5, T>: AsRef<T>
+pub trait AsRefLt5<'lt0, 'lt1, 'lt2, 'lt3, 'lt4, T>: AsRef<T>
 where
     T: ?Sized,
 {
 }
 
-impl<'lt0, 'lt1, 'lt2, 'lt3, 'lt4, 'lt5, T, I> AsRefLt6<'lt0, 'lt1, 'lt2, 'lt3, 'lt4, 'lt5, T> for I
+impl<'lt0, 'lt1, 'lt2, 'lt3, 'lt4, T, I> AsRefLt5<'lt0, 'lt1, 'lt2, 'lt3, 'lt4, T> for I
 where
     I: ?Sized + AsRef<T>,
     T: ?Sized,

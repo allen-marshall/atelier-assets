@@ -32,9 +32,9 @@ pub trait EnvironmentBasic {
     type Database;
 }
 
-/// Main trait for storage environment handles. A storage environment is
-/// essentially a type of session that can interact with a set of databases.
-/// Each database contains a key-value store.
+/// Trait for storage environment handles. A storage environment is essentially
+/// a type of session that can interact with a set of databases. Each database
+/// contains a key-value store.
 ///
 /// # Transaction semantics
 /// Transactions are tied to a specific environment, but not to a specific
@@ -52,6 +52,41 @@ pub trait EnvironmentBasic {
 ///
 /// # Parameters
 /// - `'env`: Lifetime for environment references.
+/// - `KQ`: Key type that can be used to query a database's key-value store.
+/// - `KP`: Key type that can be used to insert an entry into a database. May or
+///   may not be the same as `KQ`.
+/// - `VP`: Value type that can be used to insert an entry into a database.
+pub trait Environment<'env, KQ, KP, VP>: EnvironmentBasic {
+    /// Read-only transaction type that can be opened from the environment.
+    type RoTransaction: 'env
+        + TransactionBasic<Error = Self::Error, Database = Self::Database>
+        + for<'txn> Transaction<'txn, KQ>;
+
+    /// Read-write transaction type that can be opened from the environment.
+    type RwTransaction: 'env
+        + TransactionBasic<Error = Self::Error, Database = Self::Database>
+        + for<'txn> ReadWriteTransaction<'txn, KQ, KP, VP>;
+
+    /// Starts a new read-only transaction in the environment.
+    fn begin_ro_txn(&'env self) -> Result<Self::RoTransaction, Self::Error>
+    where
+        Self: 'env;
+
+    /// Starts a new read-write transaction in the environment. If there is
+    /// already an active read-write transaction in the environment, this
+    /// function must block until there is none.
+    fn begin_rw_txn(&'env self) -> Result<Self::RwTransaction, Self::Error>
+    where
+        Self: 'env;
+}
+
+/// Subtrait of [`Environment`][Environment] that provides additional
+/// functionality. The main reason for keeping this trait separate from
+/// [`Environment`][Environment] is to reduce the number of generic type
+/// parameters that have to be specified in typical API usage.
+///
+/// # Parameters
+/// - `'env`: Lifetime for environment references.
 /// - `EC`: Configuration data that can be provided to initialize an
 ///   environment.
 /// - `DI`: Unique ID associated with each database in the environment.
@@ -64,21 +99,14 @@ pub trait EnvironmentBasic {
 ///   may not be the same as `KQ`.
 /// - `VP`: Value type that can be used to insert an entry into a database.
 ///
-/// [sync]: self::Environment::sync
-pub trait Environment<'env, EC, DI, DC, SC, KQ, KP, VP>: Sized + EnvironmentBasic {
+/// [Environment]: self::Environment
+/// [sync]: self::EnvironmentExt::sync
+pub trait EnvironmentExt<'env, EC, DI, DC, SC, KQ, KP, VP>:
+    Sized + Environment<'env, KQ, KP, VP>
+{
     /// Configuration information that can be obtained for an individual
     /// database. May or may not be the same type as `DC`.
     type ReturnedDbConfig;
-
-    /// Read-only transaction type that can be opened from the environment.
-    type RoTransaction: 'env
-        + TransactionBasic<Error = Self::Error, Database = Self::Database>
-        + for<'txn> Transaction<'txn, KQ>;
-
-    /// Read-write transaction type that can be opened from the environment.
-    type RwTransaction: 'env
-        + TransactionBasic<Error = Self::Error, Database = Self::Database>
-        + for<'txn> ReadWriteTransaction<'txn, KQ, KP, VP>;
 
     /// Initializes an environment. To close the environment, simply drop the
     /// returned environment object.
@@ -127,18 +155,6 @@ pub trait Environment<'env, EC, DI, DC, SC, KQ, KP, VP>: Sized + EnvironmentBasi
 
     /// Gets statistics about the environment.
     fn stat(&'env self) -> Result<Self::Stat, Self::Error>
-    where
-        Self: 'env;
-
-    /// Starts a new read-only transaction in the environment.
-    fn begin_ro_txn(&'env self) -> Result<Self::RoTransaction, Self::Error>
-    where
-        Self: 'env;
-
-    /// Starts a new read-write transaction in the environment. If there is
-    /// already an active read-write transaction in the environment, this
-    /// function must block until there is none.
-    fn begin_rw_txn(&'env self) -> Result<Self::RwTransaction, Self::Error>
     where
         Self: 'env;
 }
@@ -626,7 +642,7 @@ pub unsafe trait CursorReturnedDataHandle<'cursor, D: ?Sized> {
 #[cfg(test)]
 pub(crate) mod test_util {
     use super::*;
-    use atelier_kv_store_proc_macros::require_binary_static_env;
+    use atelier_kv_store_proc_macros::{require_binary_static_env, require_binary_static_env_ext};
     use std::collections::BTreeMap;
     use std::fmt::Debug;
 
@@ -651,7 +667,7 @@ pub(crate) mod test_util {
     ///
     /// # Panics
     /// Panics if the storage environment returns an unexpected error.
-    #[require_binary_static_env(E, EC, DC, SC, crate)]
+    #[require_binary_static_env_ext(E, EC, DC, SC, crate)]
     pub(crate) fn create_dbs_for_snapshot<E, EC, DC, SC>(
         env: &mut E,
         snapshot: EnvSnapshot<Option<&str>>,
@@ -682,11 +698,9 @@ pub(crate) mod test_util {
     /// # Panics
     /// Panics if the storage environment returns an unexpected error, or if the
     /// environment contents do not match the snapshot.
-    #[require_binary_static_env(E, EC, DC, SC, crate)]
-    pub(crate) fn test_db_contents_equal<E, EC, DC, SC>(
-        env: &E,
-        expected: &EnvSnapshot<E::Database>,
-    ) where
+    #[require_binary_static_env(E, crate)]
+    pub(crate) fn test_db_contents_equal<E>(env: &E, expected: &EnvSnapshot<E::Database>)
+    where
         E::Error: Debug,
         E::Database: Ord,
     {
@@ -694,7 +708,10 @@ pub(crate) mod test_util {
         let ro_txn = env.begin_ro_txn().unwrap();
         for (db, expected_db_contents) in expected.iter() {
             for (key, value) in expected_db_contents {
-                assert_eq!(ro_txn.get(db, key).unwrap().unwrap().as_ref(), &**value);
+                assert_eq!(
+                    ro_txn.get(db, key).unwrap().unwrap().as_ref().as_ref(),
+                    &**value
+                );
             }
         }
         ro_txn.abort();
@@ -703,7 +720,10 @@ pub(crate) mod test_util {
         let rw_txn = env.begin_rw_txn().unwrap();
         for (db, expected_db_contents) in expected.iter() {
             for (key, value) in expected_db_contents {
-                assert_eq!(rw_txn.get(db, key).unwrap().unwrap().as_ref(), &**value);
+                assert_eq!(
+                    rw_txn.get(db, key).unwrap().unwrap().as_ref().as_ref(),
+                    &**value
+                );
             }
         }
         rw_txn.abort();
@@ -723,11 +743,9 @@ pub(crate) mod test_util {
     ///
     /// # Panics
     /// Panics if the storage environment returns an unexpected error.
-    #[require_binary_static_env(E, EC, DC, SC, crate)]
-    pub(crate) fn add_db_contents<E, EC, DC, SC>(
-        env: &mut E,
-        contents_to_add: &EnvSnapshot<E::Database>,
-    ) where
+    #[require_binary_static_env(E, crate)]
+    pub(crate) fn add_db_contents<E>(env: &mut E, contents_to_add: &EnvSnapshot<E::Database>)
+    where
         E::Error: Debug,
         E::Database: Ord,
     {
@@ -756,7 +774,7 @@ pub(crate) mod test_util {
     /// Panics if the storage environment returns an unexpected error, or if
     /// reading the database after the data insertions does not yield the
     /// expected results.
-    #[require_binary_static_env(E, EC, DC, SC, crate)]
+    #[require_binary_static_env_ext(E, EC, DC, SC, crate)]
     pub(crate) fn basic_test<E, EC, DC, SC>(env: &mut E, db_cfg: DC)
     where
         DC: Clone,

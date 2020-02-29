@@ -1,5 +1,5 @@
-error: Expected at least 4 arguments, got 3.
+error: Expected at most 2 arguments, got 3.
  --> $DIR/test_2.rs:5:29
   |
-5 | #[require_binary_static_env(E, EC, DC)]
-  |                             ^^^^^^^^^
+5 | #[require_binary_static_env(E, crate, X)]
+  |                             ^^^^^^^^^^^

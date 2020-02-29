@@ -11,6 +11,7 @@ pub(crate) mod require_binary_cursor;
 pub(crate) mod require_binary_rw_cursor;
 pub(crate) mod require_binary_rw_txn;
 pub(crate) mod require_binary_static_env;
+pub(crate) mod require_binary_static_env_ext;
 pub(crate) mod require_binary_txn;
 
 /// Type representing macro attribute arguments, where the following arguments
@@ -65,6 +66,27 @@ impl Parse for TypeAndCrateRootArgs {
 /// [Environment]: atelier_kv_store::Environment
 fn env_trait_bound(
     env_lt: &Lifetime,
+    kq_lt: &Lifetime,
+    kp_lt: &Lifetime,
+    vp_lt: &Lifetime,
+    crate_root_path: &syn::Path,
+) -> TypeParamBound {
+    parse_quote! {
+        #crate_root_path::Environment<
+            #env_lt,
+            & #kq_lt [u8],
+            & #kp_lt [u8],
+            & #vp_lt [u8],
+        >
+    }
+}
+
+/// Gets the [`EnvironmentExt`][EnvironmentExt] trait bound to
+/// use for the main storage environment type.
+///
+/// [EnvironmentExt]: atelier_kv_store::EnvironmentExt
+fn env_ext_trait_bound(
+    env_lt: &Lifetime,
     dbid_lt: &Lifetime,
     kq_lt: &Lifetime,
     kp_lt: &Lifetime,
@@ -75,7 +97,7 @@ fn env_trait_bound(
     crate_root_path: &syn::Path,
 ) -> TypeParamBound {
     parse_quote! {
-        #crate_root_path::Environment<
+        #crate_root_path::EnvironmentExt<
             #env_lt,
             #env_cfg_type,
             ::std::option::Option<& #dbid_lt str>,
@@ -243,6 +265,48 @@ mod tests {
     fn env_trait_bound_test() {
         let bound = env_trait_bound(
             &parse_quote! { 'env },
+            &parse_quote! { 'kq },
+            &parse_quote! { 'kp },
+            &parse_quote! { 'vp },
+            &parse_quote! { crate },
+        );
+        assert_eq!(
+            bound,
+            parse_quote! {
+                crate::Environment<
+                    'env,
+                    &'kq [u8],
+                    &'kp [u8],
+                    &'vp [u8],
+                >
+            }
+        );
+
+        let bound = env_trait_bound(
+            &parse_quote! { 'env_0 },
+            &parse_quote! { 'kq_1 },
+            &parse_quote! { 'kp_2 },
+            &parse_quote! { 'vp_0 },
+            &parse_quote! { ::atelier_kv_store },
+        );
+        assert_eq!(
+            bound,
+            parse_quote! {
+                ::atelier_kv_store::Environment<
+                    'env_0,
+                    &'kq_1 [u8],
+                    &'kp_2 [u8],
+                    &'vp_0 [u8],
+                >
+            }
+        );
+    }
+
+    /// Tests the `env_ext_trait_bound` function.
+    #[test]
+    fn env_ext_trait_bound_test() {
+        let bound = env_ext_trait_bound(
+            &parse_quote! { 'env },
             &parse_quote! { 'dbid },
             &parse_quote! { 'kq },
             &parse_quote! { 'kp },
@@ -255,7 +319,7 @@ mod tests {
         assert_eq!(
             bound,
             parse_quote! {
-                crate::Environment<
+                crate::EnvironmentExt<
                     'env,
                     EC,
                     ::std::option::Option<&'dbid str>,
@@ -268,7 +332,7 @@ mod tests {
             }
         );
 
-        let bound = env_trait_bound(
+        let bound = env_ext_trait_bound(
             &parse_quote! { 'env_0 },
             &parse_quote! { 'dbid_1 },
             &parse_quote! { 'kq_2 },
@@ -282,7 +346,7 @@ mod tests {
         assert_eq!(
             bound,
             parse_quote! {
-                ::atelier_kv_store::Environment<
+                ::atelier_kv_store::EnvironmentExt<
                     'env_0,
                     A<'a>,
                     ::std::option::Option<&'dbid_1 str>,

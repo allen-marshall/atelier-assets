@@ -1,5 +1,5 @@
-error: Expected at most 5 arguments, got 6.
- --> $DIR/test_3.rs:5:29
+error: Unexpected item type; could not modify generics.
+ --> $DIR/test_3.rs:6:1
   |
-5 | #[require_binary_static_env(E, EC, DC, SC, self, X)]
-  |                             ^^^^^^^^^^^^^^^^^^^^^^
+6 | const X: u32 = 0;
+  | ^^^^^^^^^^^^^^^^^

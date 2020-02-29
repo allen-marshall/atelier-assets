@@ -17,6 +17,59 @@ pub(crate) mod binary_static_env;
 /// usable as a `'static` key-value storage environment where the keys and
 /// values are byte strings, i.e. an LMDB-like storage environment. This macro
 /// exists because the required trait bounds are quite long and repetitive.
+/// Prefer the [`require_binary_static_env_ext`][require_binary_static_env_ext]
+/// macro if you need the extra functionality of
+/// [`EnvironmentExt`][EnvironmentExt].
+///
+/// This macro attribute expects one to two comma-separated arguments
+/// representing the following:
+/// - Main storage environment type.
+/// - Identifier path indicating where to find the `atelier_kv_store` crate.
+///   This may be needed if you have renamed the `atelier_kv_store` crate in
+///   your `Cargo.toml`. Defaults to `::atelier_kv_store`.
+///
+/// Usage example:
+///
+/// ```
+/// use atelier_kv_store::{ReadWriteTransaction, Transaction};
+/// use atelier_kv_store_proc_macros::require_binary_static_env;
+/// use std::fmt::Debug;
+///
+/// #[require_binary_static_env(E)]
+/// fn do_something<E>(env: &mut E, db: &E::Database)
+///     where
+///         E::Error: Debug,
+/// {
+///     // Here you can manipulate the storage environment using the API defined
+///     // in the atelier_kv_store crate, because the macro has added the
+///     // required trait bounds to the function's where clause.
+///     let mut rw_txn = env.begin_rw_txn().unwrap();
+///     rw_txn.put(db, b"new_key", b"new_value").unwrap();
+///     rw_txn.commit().unwrap();
+/// }
+/// ```
+///
+/// [require_binary_static_env_ext]: self::require_binary_static_env_ext
+/// [EnvironmentExt]: atelier_kv_store::EnvironmentExt
+#[proc_macro_attribute]
+pub fn require_binary_static_env(
+    attr: proc_macro::TokenStream,
+    item: proc_macro::TokenStream,
+) -> proc_macro::TokenStream {
+    binary_static_env::require_binary_static_env::require_binary_static_env(
+        attr.into(),
+        item.into(),
+    )
+    .into()
+}
+
+/// Adds trait bounds to a `where` clause in order to constrain a type to be
+/// usable as a `'static` key-value storage environment where the keys and
+/// values are byte strings, i.e. an LMDB-like storage environment. This macro
+/// exists because the required trait bounds are quite long and repetitive.
+/// Prefer the [`require_binary_static_env`][require_binary_static_env] macro if
+/// you don't need the extra functionality of
+/// [`EnvironmentExt`][EnvironmentExt].
 ///
 /// This macro attribute expects four to five comma-separated arguments
 /// representing the following:
@@ -33,10 +86,10 @@ pub(crate) mod binary_static_env;
 ///
 /// ```
 /// use atelier_kv_store::{ReadWriteTransaction, Transaction};
-/// use atelier_kv_store_proc_macros::require_binary_static_env;
+/// use atelier_kv_store_proc_macros::require_binary_static_env_ext;
 /// use std::fmt::Debug;
 ///
-/// #[require_binary_static_env(E, EC, DC, SC)]
+/// #[require_binary_static_env_ext(E, EC, DC, SC)]
 /// fn do_something<E, EC, DC, SC>(env: &mut E, db_cfg: DC)
 ///     where
 ///         E::Error: Debug,
@@ -50,12 +103,15 @@ pub(crate) mod binary_static_env;
 ///     rw_txn.commit().unwrap();
 /// }
 /// ```
+///
+/// [require_binary_static_env]: self::require_binary_static_env
+/// [EnvironmentExt]: atelier_kv_store::EnvironmentExt
 #[proc_macro_attribute]
-pub fn require_binary_static_env(
+pub fn require_binary_static_env_ext(
     attr: proc_macro::TokenStream,
     item: proc_macro::TokenStream,
 ) -> proc_macro::TokenStream {
-    binary_static_env::require_binary_static_env::require_binary_static_env(
+    binary_static_env::require_binary_static_env_ext::require_binary_static_env_ext(
         attr.into(),
         item.into(),
     )
