@@ -1,5 +1,5 @@
 error: Expected at least 4 arguments, got 3.
- --> $DIR/test_2.rs:5:33
+ --> $DIR/too_few_args.rs:5:33
   |
 5 | #[require_binary_static_env_ext(E, EC, DC)]
   |                                 ^^^^^^^^^

@@ -1,5 +1,5 @@
 error: Expected at least 1 arguments, got 0.
- --> $DIR/test_1.rs:5:1
+ --> $DIR/empty_args.rs:5:1
   |
 5 | #[require_binary_txn()]
   | ^^^^^^^^^^^^^^^^^^^^^^^

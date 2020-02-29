@@ -1,5 +1,5 @@
 error: Expected at most 2 arguments, got 3.
- --> $DIR/test_2.rs:5:28
+ --> $DIR/too_many_args.rs:5:28
   |
 5 | #[require_binary_rw_cursor(C, self, X)]
   |                            ^^^^^^^^^^

@@ -1,5 +1,5 @@
 error: Unexpected item type; could not modify generics.
- --> $DIR/test_4.rs:6:1
+ --> $DIR/invalid_item_type.rs:6:1
   |
 6 | const X: u32 = 0;
   | ^^^^^^^^^^^^^^^^^
