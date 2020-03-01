@@ -163,21 +163,38 @@ impl crate::EnvironmentBasic for Environment {
     type Database = Database;
 }
 
-impl<'cfg, 'envb, 'path, 'env, 'dbid, 'kq, 'kp, 'vp>
-    crate::Environment<
+impl<'env> crate::Environment<'env, [u8], [u8], [u8]> for Environment {
+    type RoTransaction = RoTransaction<'env>;
+    type RwTransaction = RwTransaction<'env>;
+
+    fn begin_ro_txn(&'env self) -> Result<Self::RoTransaction, Self::Error>
+    where
+        Self: 'env,
+    {
+        Ok(RoTransaction(self.0.begin_ro_txn()?))
+    }
+
+    fn begin_rw_txn(&'env self) -> Result<Self::RwTransaction, Self::Error>
+    where
+        Self: 'env,
+    {
+        Ok(RwTransaction(self.0.begin_rw_txn()?))
+    }
+}
+
+impl<'cfg, 'envb, 'path, 'env, 'dbid>
+    crate::EnvironmentExt<
         'env,
         &'cfg EnvironmentConfig<'envb, 'path>,
         Option<&'dbid str>,
         DbConfig,
         SyncConfig,
-        &'kq [u8],
-        &'kp [u8],
-        &'vp [u8],
+        [u8],
+        [u8],
+        [u8],
     > for Environment
 {
     type ReturnedDbConfig = DbConfig;
-    type RoTransaction = RoTransaction<'env>;
-    type RwTransaction = RwTransaction<'env>;
 
     fn new(config: &'cfg EnvironmentConfig<'envb, 'path>) -> Result<Self, Self::Error>
     where
@@ -245,20 +262,6 @@ impl<'cfg, 'envb, 'path, 'env, 'dbid, 'kq, 'kp, 'vp>
     {
         self.0.stat().map_err(Into::into)
     }
-
-    fn begin_ro_txn(&'env self) -> Result<Self::RoTransaction, Self::Error>
-    where
-        Self: 'env,
-    {
-        Ok(RoTransaction(self.0.begin_ro_txn()?))
-    }
-
-    fn begin_rw_txn(&'env self) -> Result<Self::RwTransaction, Self::Error>
-    where
-        Self: 'env,
-    {
-        Ok(RwTransaction(self.0.begin_rw_txn()?))
-    }
 }
 
 /// Read-only transaction type for the LMDB wrapper.
@@ -268,11 +271,13 @@ pub struct RoTransaction<'env>(lmdb::RoTransaction<'env>);
 impl<'env> crate::TransactionBasic for RoTransaction<'env> {
     type Error = Error;
     type Database = Database;
+    type ReturnedKey = [u8];
+    type ReturnedValue = [u8];
 }
 
-impl<'env, 'txn, 'kq> crate::Transaction<'txn, &'kq [u8]> for RoTransaction<'env> {
+impl<'env, 'txn> crate::Transaction<'txn, [u8]> for RoTransaction<'env> {
     type ReturnedDbConfig = DbConfig;
-    type ReturnedValue = &'txn [u8];
+    type ReturnedValueHandle = &'txn [u8];
     type RoCursor = RoCursor<'txn>;
 
     fn commit(self) -> Result<(), Self::Error>
@@ -285,8 +290,8 @@ impl<'env, 'txn, 'kq> crate::Transaction<'txn, &'kq [u8]> for RoTransaction<'env
     fn get(
         &'txn self,
         db: &Self::Database,
-        key: &'kq [u8],
-    ) -> Result<Option<Self::ReturnedValue>, Self::Error>
+        key: &[u8],
+    ) -> Result<Option<Self::ReturnedValueHandle>, Self::Error>
     where
         Self: 'txn,
     {
@@ -341,11 +346,13 @@ pub struct RwTransaction<'env>(lmdb::RwTransaction<'env>);
 impl<'env> crate::TransactionBasic for RwTransaction<'env> {
     type Error = Error;
     type Database = Database;
+    type ReturnedKey = [u8];
+    type ReturnedValue = [u8];
 }
 
-impl<'env, 'txn, 'kq> crate::Transaction<'txn, &'kq [u8]> for RwTransaction<'env> {
+impl<'env, 'txn> crate::Transaction<'txn, [u8]> for RwTransaction<'env> {
     type ReturnedDbConfig = DbConfig;
-    type ReturnedValue = &'txn [u8];
+    type ReturnedValueHandle = &'txn [u8];
     type RoCursor = RoCursor<'txn>;
 
     fn commit(self) -> Result<(), Self::Error>
@@ -358,8 +365,8 @@ impl<'env, 'txn, 'kq> crate::Transaction<'txn, &'kq [u8]> for RwTransaction<'env
     fn get(
         &'txn self,
         db: &Self::Database,
-        key: &'kq [u8],
-    ) -> Result<Option<Self::ReturnedValue>, Self::Error>
+        key: &[u8],
+    ) -> Result<Option<Self::ReturnedValueHandle>, Self::Error>
     where
         Self: 'txn,
     {
@@ -386,18 +393,11 @@ impl<'env, 'txn, 'kq> crate::Transaction<'txn, &'kq [u8]> for RwTransaction<'env
     }
 }
 
-impl<'env, 'txn, 'kq, 'kp, 'vp> crate::ReadWriteTransaction<'txn, &'kq [u8], &'kp [u8], &'vp [u8]>
-    for RwTransaction<'env>
-{
+impl<'env, 'txn> crate::ReadWriteTransaction<'txn, [u8], [u8], [u8]> for RwTransaction<'env> {
     type RwCursor = RwCursor<'txn>;
     type Nested = RwTransaction<'txn>;
 
-    fn put(
-        &'txn mut self,
-        db: &Self::Database,
-        key: &'kp [u8],
-        value: &'vp [u8],
-    ) -> Result<(), Self::Error>
+    fn put(&'txn mut self, db: &Self::Database, key: &[u8], value: &[u8]) -> Result<(), Self::Error>
     where
         Self: 'txn,
     {
@@ -409,8 +409,8 @@ impl<'env, 'txn, 'kq, 'kp, 'vp> crate::ReadWriteTransaction<'txn, &'kq [u8], &'k
     fn put_no_overwrite(
         &'txn mut self,
         db: &Self::Database,
-        key: &'kp [u8],
-        value: &'vp [u8],
+        key: &[u8],
+        value: &[u8],
     ) -> Result<bool, Self::Error>
     where
         Self: 'txn,
@@ -425,7 +425,7 @@ impl<'env, 'txn, 'kq, 'kp, 'vp> crate::ReadWriteTransaction<'txn, &'kq [u8], &'k
         }
     }
 
-    fn del(&'txn mut self, db: &Self::Database, key: &'kq [u8]) -> Result<bool, Self::Error>
+    fn del(&'txn mut self, db: &Self::Database, key: &[u8]) -> Result<bool, Self::Error>
     where
         Self: 'txn,
     {
@@ -541,7 +541,7 @@ impl<'txn> crate::CursorBasic for RoCursor<'txn> {
     type ReturnedValue = [u8];
 }
 
-impl<'txn, 'cursor, 'kq> crate::Cursor<'cursor, &'kq [u8]> for RoCursor<'txn> {
+impl<'txn, 'cursor> crate::Cursor<'cursor, [u8]> for RoCursor<'txn> {
     type ReturnedKeyHandle = CursorReturnedDataHandle<'cursor>;
     type ReturnedValueHandle = CursorReturnedDataHandle<'cursor>;
 
@@ -592,7 +592,7 @@ impl<'txn, 'cursor, 'kq> crate::Cursor<'cursor, &'kq [u8]> for RoCursor<'txn> {
 
     fn move_to_key(
         &'cursor mut self,
-        key: &'kq [u8],
+        key: &[u8],
     ) -> Result<Option<Self::ReturnedValueHandle>, Self::Error>
     where
         Self: 'cursor,
@@ -602,7 +602,7 @@ impl<'txn, 'cursor, 'kq> crate::Cursor<'cursor, &'kq [u8]> for RoCursor<'txn> {
 
     fn move_to_key_and_get_key(
         &'cursor mut self,
-        key: &'kq [u8],
+        key: &[u8],
     ) -> Result<Option<(Self::ReturnedKeyHandle, Self::ReturnedValueHandle)>, Self::Error>
     where
         Self: 'cursor,
@@ -612,7 +612,7 @@ impl<'txn, 'cursor, 'kq> crate::Cursor<'cursor, &'kq [u8]> for RoCursor<'txn> {
 
     fn move_to_key_or_after(
         &'cursor mut self,
-        key: &'kq [u8],
+        key: &[u8],
     ) -> Result<Option<(Self::ReturnedKeyHandle, Self::ReturnedValueHandle)>, Self::Error>
     where
         Self: 'cursor,
@@ -631,7 +631,7 @@ impl<'txn> crate::CursorBasic for RwCursor<'txn> {
     type ReturnedValue = [u8];
 }
 
-impl<'txn, 'cursor, 'kq> crate::Cursor<'cursor, &'kq [u8]> for RwCursor<'txn> {
+impl<'txn, 'cursor> crate::Cursor<'cursor, [u8]> for RwCursor<'txn> {
     type ReturnedKeyHandle = CursorReturnedDataHandle<'cursor>;
     type ReturnedValueHandle = CursorReturnedDataHandle<'cursor>;
 
@@ -682,7 +682,7 @@ impl<'txn, 'cursor, 'kq> crate::Cursor<'cursor, &'kq [u8]> for RwCursor<'txn> {
 
     fn move_to_key(
         &'cursor mut self,
-        key: &'kq [u8],
+        key: &[u8],
     ) -> Result<Option<Self::ReturnedValueHandle>, Self::Error>
     where
         Self: 'cursor,
@@ -692,7 +692,7 @@ impl<'txn, 'cursor, 'kq> crate::Cursor<'cursor, &'kq [u8]> for RwCursor<'txn> {
 
     fn move_to_key_and_get_key(
         &'cursor mut self,
-        key: &'kq [u8],
+        key: &[u8],
     ) -> Result<Option<(Self::ReturnedKeyHandle, Self::ReturnedValueHandle)>, Self::Error>
     where
         Self: 'cursor,
@@ -702,7 +702,7 @@ impl<'txn, 'cursor, 'kq> crate::Cursor<'cursor, &'kq [u8]> for RwCursor<'txn> {
 
     fn move_to_key_or_after(
         &'cursor mut self,
-        key: &'kq [u8],
+        key: &[u8],
     ) -> Result<Option<(Self::ReturnedKeyHandle, Self::ReturnedValueHandle)>, Self::Error>
     where
         Self: 'cursor,
@@ -711,14 +711,8 @@ impl<'txn, 'cursor, 'kq> crate::Cursor<'cursor, &'kq [u8]> for RwCursor<'txn> {
     }
 }
 
-impl<'txn, 'cursor, 'kq, 'kp, 'vp> crate::ReadWriteCursor<'cursor, &'kq [u8], &'kp [u8], &'vp [u8]>
-    for RwCursor<'txn>
-{
-    fn put_and_move_to_key(
-        &'cursor mut self,
-        key: &'kp [u8],
-        value: &'vp [u8],
-    ) -> Result<(), Self::Error>
+impl<'txn, 'cursor> crate::ReadWriteCursor<'cursor, [u8], [u8], [u8]> for RwCursor<'txn> {
+    fn put_and_move_to_key(&'cursor mut self, key: &[u8], value: &[u8]) -> Result<(), Self::Error>
     where
         Self: 'cursor,
     {
@@ -729,8 +723,8 @@ impl<'txn, 'cursor, 'kq, 'kp, 'vp> crate::ReadWriteCursor<'cursor, &'kq [u8], &'
 
     fn put_no_overwrite_and_move_to_key(
         &'cursor mut self,
-        key: &'kp [u8],
-        value: &'vp [u8],
+        key: &[u8],
+        value: &[u8],
     ) -> Result<bool, Self::Error>
     where
         Self: 'cursor,
@@ -770,19 +764,22 @@ mod tests {
     /// Panics if the storage environment returns an unexpected error.
     fn make_empty_env(env_builder: &lmdb::EnvironmentBuilder) -> (Environment, TempDir) {
         let temp_dir = tempdir().unwrap();
-        let env =
-            crate::Environment::new(&EnvironmentConfig::new(&env_builder, temp_dir.path(), None))
-                .unwrap();
+        let env = crate::EnvironmentExt::new(&EnvironmentConfig::new(
+            &env_builder,
+            temp_dir.path(),
+            None,
+        ))
+        .unwrap();
         (env, temp_dir)
     }
 
     /// Basic test that creates an empty storage environment, writes some data
     /// to it, then makes sure it can read the data back.
     #[test]
-    fn basic_test() {
+    fn basic_read_write_test() {
         let mut env_builder = lmdb::Environment::new();
         env_builder.set_max_dbs(10);
         let (mut env, _temp_dir) = make_empty_env(&env_builder);
-        crate::test_util::basic_test(&mut env, lmdb::DatabaseFlags::empty());
+        crate::test_util::basic_read_write_test(&mut env, lmdb::DatabaseFlags::empty());
     }
 }
