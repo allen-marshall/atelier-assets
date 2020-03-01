@@ -3,16 +3,14 @@
 //!
 //! [require_binary_txn]: crate::require_binary_txn
 
-use crate::binary_static_env::{
-    cursor_basic_trait_bound, txn_basic_trait_bound, txn_trait_bound, TypeAndCrateRootArgs,
-};
+use crate::binary_static_env::{txn_basic_trait_bound, txn_trait_bound, TypeAndCrateRootArgs};
 use crate::{
     add_where_predicates, find_generics_mut, remove_ident_name_conflicts, LifetimeNameFinder,
 };
 use proc_macro2::{Span, TokenStream};
 use quote::ToTokens;
 use syn::visit::{visit_path, visit_type};
-use syn::{parse2, parse_quote, BoundLifetimes, Lifetime, TypeParamBound};
+use syn::{parse2, parse_quote, BoundLifetimes, Lifetime};
 
 /// Represents the lifetime names to be used in the output of a specific
 /// invocation of the [`require_binary_txn`][require_binary_txn] macro
@@ -23,9 +21,6 @@ use syn::{parse2, parse_quote, BoundLifetimes, Lifetime, TypeParamBound};
 struct BoundsLifetimeNames {
     /// Lifetime name for transaction references.
     txn_lt: Lifetime,
-
-    /// Lifetime name for key references used in queries.
-    kq_lt: Lifetime,
 }
 
 /// Chooses names for the lifetimes to be used in the output of a specific
@@ -47,12 +42,11 @@ fn name_lifetimes(args: &TypeAndCrateRootArgs) -> BoundsLifetimeNames {
     let mut forbidden_finder = LifetimeNameFinder::default();
     visit_type(&mut forbidden_finder, &args.type_arg);
     visit_path(&mut forbidden_finder, &args.crate_root_path);
-    let mut chosen_names = vec!["txn".to_string(), "kq".to_string()];
+    let mut chosen_names = vec!["txn".to_string()];
     remove_ident_name_conflicts(&mut chosen_names, &forbidden_finder.names_found());
 
     BoundsLifetimeNames {
         txn_lt: name_to_lifetime(&chosen_names[0]),
-        kq_lt: name_to_lifetime(&chosen_names[1]),
     }
 }
 
@@ -72,24 +66,11 @@ pub(crate) fn require_binary_txn(attr: TokenStream, item: TokenStream) -> TokenS
         let lt_names = name_lifetimes(&args);
 
         // Bring parameters into scope so we can use them in parse_quote.
-        let (txn_lt, kq_lt, txn_type, crate_root_path) = (
-            &lt_names.txn_lt,
-            &lt_names.kq_lt,
-            &args.type_arg,
-            &args.crate_root_path,
-        );
+        let (txn_lt, txn_type) = (&lt_names.txn_lt, &args.type_arg);
 
-        let lt_quant: BoundLifetimes = parse_quote! { for<#txn_lt, #kq_lt,> };
+        let lt_quant: BoundLifetimes = parse_quote! { for<#txn_lt,> };
         let txn_basic_trait = txn_basic_trait_bound(&args.crate_root_path);
-        let txn_trait = txn_trait_bound(&lt_names.txn_lt, &lt_names.kq_lt, &args.crate_root_path);
-        let cursor_basic_trait = cursor_basic_trait_bound(&args.crate_root_path);
-        let as_ref_trait: TypeParamBound = parse_quote! {
-            #crate_root_path::lt_trait_wrappers::AsRefLt2<
-                #txn_lt,
-                #kq_lt,
-                [u8],
-            >
-        };
+        let txn_trait = txn_trait_bound(&lt_names.txn_lt, &args.crate_root_path);
 
         // Parse the item and augment its where clause with the required bounds.
         let mut output = parse2(item)?;
@@ -100,13 +81,10 @@ pub(crate) fn require_binary_txn(attr: TokenStream, item: TokenStream) -> TokenS
                     #lt_quant #txn_type: #txn_trait
                 },
                 parse_quote! {
+                    <#txn_type as #txn_basic_trait>::ReturnedKey: ::std::convert::AsRef<[u8]>
+                },
+                parse_quote! {
                     <#txn_type as #txn_basic_trait>::ReturnedValue: ::std::convert::AsRef<[u8]>
-                },
-                parse_quote! {
-                    #lt_quant <<#txn_type as #txn_trait>::RoCursor as #cursor_basic_trait>::ReturnedKey: #as_ref_trait
-                },
-                parse_quote! {
-                    #lt_quant <<#txn_type as #txn_trait>::RoCursor as #cursor_basic_trait>::ReturnedValue: #as_ref_trait
                 },
             ],
         );
@@ -131,7 +109,6 @@ mod tests {
             lt_names,
             BoundsLifetimeNames {
                 txn_lt: parse_quote! { 'txn },
-                kq_lt: parse_quote! { 'kq },
             }
         );
 
@@ -140,7 +117,6 @@ mod tests {
             lt_names,
             BoundsLifetimeNames {
                 txn_lt: parse_quote! { 'txn },
-                kq_lt: parse_quote! { 'kq },
             }
         );
 
@@ -149,7 +125,6 @@ mod tests {
             lt_names,
             BoundsLifetimeNames {
                 txn_lt: parse_quote! { 'txn_0 },
-                kq_lt: parse_quote! { 'kq_0 },
             }
         );
 
@@ -158,7 +133,6 @@ mod tests {
             lt_names,
             BoundsLifetimeNames {
                 txn_lt: parse_quote! { 'txn_2 },
-                kq_lt: parse_quote! { 'kq },
             }
         );
     }
@@ -175,10 +149,9 @@ mod tests {
             test_output,
             parse_quote! {
                 fn do_something<T>(txn: &mut T) where
-                    for<'txn, 'kq,> T: crate::Transaction<'txn, &'kq [u8],>,
-                    <T as crate::TransactionBasic>::ReturnedValue: ::std::convert::AsRef<[u8]>,
-                    for<'txn, 'kq,> <<T as crate::Transaction<'txn, &'kq [u8],>>::RoCursor as crate::CursorBasic>::ReturnedKey: crate::lt_trait_wrappers::AsRefLt2<'txn, 'kq, [u8],>,
-                    for<'txn, 'kq,> <<T as crate::Transaction<'txn, &'kq [u8],>>::RoCursor as crate::CursorBasic>::ReturnedValue: crate::lt_trait_wrappers::AsRefLt2<'txn, 'kq, [u8],>
+                    for<'txn,> T: crate::Transaction<'txn, [u8],>,
+                    <T as crate::TransactionBasic>::ReturnedKey: ::std::convert::AsRef<[u8]>,
+                    <T as crate::TransactionBasic>::ReturnedValue: ::std::convert::AsRef<[u8]>
                 {}
             }
         );
@@ -193,10 +166,9 @@ mod tests {
             parse_quote! {
                 fn do_something<T>(txn: &mut T) where
                     T: ::std::fmt::Debug,
-                    for<'txn_0, 'kq,> &'txn T: crate::Transaction<'txn_0, &'kq [u8],>,
-                     <&'txn T as crate::TransactionBasic>::ReturnedValue: ::std::convert::AsRef<[u8]>,
-                    for<'txn_0, 'kq,> <<&'txn T as crate::Transaction<'txn_0, &'kq [u8],>>::RoCursor as crate::CursorBasic>::ReturnedKey: crate::lt_trait_wrappers::AsRefLt2<'txn_0, 'kq, [u8],>,
-                    for<'txn_0, 'kq,> <<&'txn T as crate::Transaction<'txn_0, &'kq [u8],>>::RoCursor as crate::CursorBasic>::ReturnedValue: crate::lt_trait_wrappers::AsRefLt2<'txn_0, 'kq, [u8],>
+                    for<'txn_0,> &'txn T: crate::Transaction<'txn_0, [u8],>,
+                     <&'txn T as crate::TransactionBasic>::ReturnedKey: ::std::convert::AsRef<[u8]>,
+                     <&'txn T as crate::TransactionBasic>::ReturnedValue: ::std::convert::AsRef<[u8]>
                 {}
             }
         );
@@ -211,10 +183,9 @@ mod tests {
             parse_quote! {
                 fn do_something<T>(txn: &mut T) where
                     T: ::std::fmt::Debug,
-                    for<'txn, 'kq,> T: ::atelier_kv_store::Transaction<'txn, &'kq [u8],>,
-                     <T as ::atelier_kv_store::TransactionBasic>::ReturnedValue: ::std::convert::AsRef<[u8]>,
-                    for<'txn, 'kq,> <<T as ::atelier_kv_store::Transaction<'txn, &'kq [u8],>>::RoCursor as ::atelier_kv_store::CursorBasic>::ReturnedKey: ::atelier_kv_store::lt_trait_wrappers::AsRefLt2<'txn, 'kq, [u8],>,
-                    for<'txn, 'kq,> <<T as ::atelier_kv_store::Transaction<'txn, &'kq [u8],>>::RoCursor as ::atelier_kv_store::CursorBasic>::ReturnedValue: ::atelier_kv_store::lt_trait_wrappers::AsRefLt2<'txn, 'kq, [u8],>
+                    for<'txn,> T: ::atelier_kv_store::Transaction<'txn, [u8],>,
+                     <T as ::atelier_kv_store::TransactionBasic>::ReturnedKey: ::std::convert::AsRef<[u8]>,
+                     <T as ::atelier_kv_store::TransactionBasic>::ReturnedValue: ::std::convert::AsRef<[u8]>
                 {}
             }
         );

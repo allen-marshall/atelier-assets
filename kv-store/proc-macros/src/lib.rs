@@ -15,11 +15,9 @@ pub(crate) mod binary_static_env;
 
 /// Adds trait bounds to a `where` clause in order to constrain a type to be
 /// usable as a `'static` key-value storage environment where the keys and
-/// values are byte strings, i.e. an LMDB-like storage environment. This macro
-/// exists because the required trait bounds are quite long and repetitive.
-/// Prefer the [`require_binary_static_env_ext`][require_binary_static_env_ext]
-/// macro if you need the extra functionality of
-/// [`EnvironmentExt`][EnvironmentExt].
+/// values are byte strings, i.e. an LMDB-like storage environment. Prefer the
+/// [`require_binary_static_env_ext`][require_binary_static_env_ext]  macro if
+/// you need the extra functionality of [`EnvironmentExt`][EnvironmentExt].
 ///
 /// This macro attribute expects one to two comma-separated arguments
 /// representing the following:
@@ -65,11 +63,9 @@ pub fn require_binary_static_env(
 
 /// Adds trait bounds to a `where` clause in order to constrain a type to be
 /// usable as a `'static` key-value storage environment where the keys and
-/// values are byte strings, i.e. an LMDB-like storage environment. This macro
-/// exists because the required trait bounds are quite long and repetitive.
-/// Prefer the [`require_binary_static_env`][require_binary_static_env] macro if
-/// you don't need the extra functionality of
-/// [`EnvironmentExt`][EnvironmentExt].
+/// values are byte strings, i.e. an LMDB-like storage environment. Prefer the
+/// [`require_binary_static_env`][require_binary_static_env] macro if you don't
+/// need the extra functionality of [`EnvironmentExt`][EnvironmentExt].
 ///
 /// This macro attribute expects four to five comma-separated arguments
 /// representing the following:

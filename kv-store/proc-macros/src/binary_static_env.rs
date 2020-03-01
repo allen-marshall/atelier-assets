@@ -64,19 +64,13 @@ impl Parse for TypeAndCrateRootArgs {
 /// storage environment type.
 ///
 /// [Environment]: atelier_kv_store::Environment
-fn env_trait_bound(
-    env_lt: &Lifetime,
-    kq_lt: &Lifetime,
-    kp_lt: &Lifetime,
-    vp_lt: &Lifetime,
-    crate_root_path: &syn::Path,
-) -> TypeParamBound {
+fn env_trait_bound(env_lt: &Lifetime, crate_root_path: &syn::Path) -> TypeParamBound {
     parse_quote! {
         #crate_root_path::Environment<
             #env_lt,
-            & #kq_lt [u8],
-            & #kp_lt [u8],
-            & #vp_lt [u8],
+            [u8],
+            [u8],
+            [u8],
         >
     }
 }
@@ -88,9 +82,6 @@ fn env_trait_bound(
 fn env_ext_trait_bound(
     env_lt: &Lifetime,
     dbid_lt: &Lifetime,
-    kq_lt: &Lifetime,
-    kp_lt: &Lifetime,
-    vp_lt: &Lifetime,
     env_cfg_type: &Type,
     db_cfg_type: &Type,
     sync_cfg_type: &Type,
@@ -103,9 +94,9 @@ fn env_ext_trait_bound(
             ::std::option::Option<& #dbid_lt str>,
             #db_cfg_type,
             #sync_cfg_type,
-            & #kq_lt [u8],
-            & #kp_lt [u8],
-            & #vp_lt [u8],
+            [u8],
+            [u8],
+            [u8],
         >
     }
 }
@@ -124,15 +115,11 @@ fn txn_basic_trait_bound(crate_root_path: &syn::Path) -> TypeParamBound {
 /// types.
 ///
 /// [Transaction]: atelier_kv_store::Transaction
-fn txn_trait_bound(
-    txn_lt: &Lifetime,
-    kq_lt: &Lifetime,
-    crate_root_path: &syn::Path,
-) -> TypeParamBound {
+fn txn_trait_bound(txn_lt: &Lifetime, crate_root_path: &syn::Path) -> TypeParamBound {
     parse_quote! {
         #crate_root_path::Transaction<
             #txn_lt,
-            & #kq_lt [u8],
+            [u8],
         >
     }
 }
@@ -141,19 +128,13 @@ fn txn_trait_bound(
 /// for read-write transaction types.
 ///
 /// [ReadWriteTransaction]: atelier_kv_store::ReadWriteTransaction
-fn rw_txn_trait_bound(
-    txn_lt: &Lifetime,
-    kq_lt: &Lifetime,
-    kp_lt: &Lifetime,
-    vp_lt: &Lifetime,
-    crate_root_path: &syn::Path,
-) -> TypeParamBound {
+fn rw_txn_trait_bound(txn_lt: &Lifetime, crate_root_path: &syn::Path) -> TypeParamBound {
     parse_quote! {
         #crate_root_path::ReadWriteTransaction<
             #txn_lt,
-            & #kq_lt [u8],
-            & #kp_lt [u8],
-            & #vp_lt [u8],
+            [u8],
+            [u8],
+            [u8],
         >
     }
 }
@@ -170,15 +151,11 @@ fn cursor_basic_trait_bound(crate_root_path: &syn::Path) -> TypeParamBound {
 /// Gets the [`Cursor`][Cursor] trait bound to use for cursor types.
 ///
 /// [Cursor]: atelier_kv_store::Cursor
-fn cursor_trait_bound(
-    cursor_lt: &Lifetime,
-    kq_lt: &Lifetime,
-    crate_root_path: &syn::Path,
-) -> TypeParamBound {
+fn cursor_trait_bound(cursor_lt: &Lifetime, crate_root_path: &syn::Path) -> TypeParamBound {
     parse_quote! {
         #crate_root_path::Cursor<
             #cursor_lt,
-            & #kq_lt [u8],
+            [u8],
         >
     }
 }
@@ -187,19 +164,13 @@ fn cursor_trait_bound(
 /// read-write cursor types.
 ///
 /// [ReadWriteCursor]: atelier_kv_store::ReadWriteCursor
-fn rw_cursor_trait_bound(
-    cursor_lt: &Lifetime,
-    kq_lt: &Lifetime,
-    kp_lt: &Lifetime,
-    vp_lt: &Lifetime,
-    crate_root_path: &syn::Path,
-) -> TypeParamBound {
+fn rw_cursor_trait_bound(cursor_lt: &Lifetime, crate_root_path: &syn::Path) -> TypeParamBound {
     parse_quote! {
         #crate_root_path::ReadWriteCursor<
             #cursor_lt,
-            & #kq_lt [u8],
-            & #kp_lt [u8],
-            & #vp_lt [u8],
+            [u8],
+            [u8],
+            [u8],
         >
     }
 }
@@ -263,30 +234,21 @@ mod tests {
     /// Tests the `env_trait_bound` function.
     #[test]
     fn env_trait_bound_test() {
-        let bound = env_trait_bound(
-            &parse_quote! { 'env },
-            &parse_quote! { 'kq },
-            &parse_quote! { 'kp },
-            &parse_quote! { 'vp },
-            &parse_quote! { crate },
-        );
+        let bound = env_trait_bound(&parse_quote! { 'env }, &parse_quote! { crate });
         assert_eq!(
             bound,
             parse_quote! {
                 crate::Environment<
                     'env,
-                    &'kq [u8],
-                    &'kp [u8],
-                    &'vp [u8],
+                    [u8],
+                    [u8],
+                    [u8],
                 >
             }
         );
 
         let bound = env_trait_bound(
             &parse_quote! { 'env_0 },
-            &parse_quote! { 'kq_1 },
-            &parse_quote! { 'kp_2 },
-            &parse_quote! { 'vp_0 },
             &parse_quote! { ::atelier_kv_store },
         );
         assert_eq!(
@@ -294,9 +256,9 @@ mod tests {
             parse_quote! {
                 ::atelier_kv_store::Environment<
                     'env_0,
-                    &'kq_1 [u8],
-                    &'kp_2 [u8],
-                    &'vp_0 [u8],
+                    [u8],
+                    [u8],
+                    [u8],
                 >
             }
         );
@@ -308,9 +270,6 @@ mod tests {
         let bound = env_ext_trait_bound(
             &parse_quote! { 'env },
             &parse_quote! { 'dbid },
-            &parse_quote! { 'kq },
-            &parse_quote! { 'kp },
-            &parse_quote! { 'vp },
             &parse_quote! { EC },
             &parse_quote! { DC },
             &parse_quote! { SC },
@@ -325,9 +284,9 @@ mod tests {
                     ::std::option::Option<&'dbid str>,
                     DC,
                     SC,
-                    &'kq [u8],
-                    &'kp [u8],
-                    &'vp [u8],
+                    [u8],
+                    [u8],
+                    [u8],
                 >
             }
         );
@@ -335,9 +294,6 @@ mod tests {
         let bound = env_ext_trait_bound(
             &parse_quote! { 'env_0 },
             &parse_quote! { 'dbid_1 },
-            &parse_quote! { 'kq_2 },
-            &parse_quote! { 'kp_0 },
-            &parse_quote! { 'vp_1 },
             &parse_quote! { A<'a> },
             &parse_quote! { B<'env> },
             &parse_quote! { C<'c> },
@@ -352,9 +308,9 @@ mod tests {
                     ::std::option::Option<&'dbid_1 str>,
                     B<'env>,
                     C<'c>,
-                    &'kq_2 [u8],
-                    &'kp_0 [u8],
-                    &'vp_1 [u8],
+                    [u8],
+                    [u8],
+                    [u8],
                 >
             }
         );
@@ -383,24 +339,19 @@ mod tests {
     /// Tests the `txn_trait_bound` function.
     #[test]
     fn txn_trait_bound_test() {
-        let bound = txn_trait_bound(
-            &parse_quote! { 'txn },
-            &parse_quote! { 'kq },
-            &parse_quote! { crate },
-        );
+        let bound = txn_trait_bound(&parse_quote! { 'txn }, &parse_quote! { crate });
         assert_eq!(
             bound,
             parse_quote! {
                 crate::Transaction<
                     'txn,
-                    &'kq [u8],
+                    [u8],
                 >
             }
         );
 
         let bound = txn_trait_bound(
             &parse_quote! { 'txn_0 },
-            &parse_quote! { 'kq_1 },
             &parse_quote! { ::atelier_kv_store },
         );
         assert_eq!(
@@ -408,7 +359,7 @@ mod tests {
             parse_quote! {
                 ::atelier_kv_store::Transaction<
                     'txn_0,
-                    &'kq_1 [u8],
+                    [u8],
                 >
             }
         );
@@ -417,30 +368,21 @@ mod tests {
     /// Tests the `rw_txn_trait_bound` function.
     #[test]
     fn rw_txn_trait_bound_test() {
-        let bound = rw_txn_trait_bound(
-            &parse_quote! { 'txn },
-            &parse_quote! { 'kq },
-            &parse_quote! { 'kp },
-            &parse_quote! { 'vp },
-            &parse_quote! { crate },
-        );
+        let bound = rw_txn_trait_bound(&parse_quote! { 'txn }, &parse_quote! { crate });
         assert_eq!(
             bound,
             parse_quote! {
                 crate::ReadWriteTransaction<
                     'txn,
-                    &'kq [u8],
-                    &'kp [u8],
-                    &'vp [u8],
+                    [u8],
+                    [u8],
+                    [u8],
                 >
             }
         );
 
         let bound = rw_txn_trait_bound(
             &parse_quote! { 'txn_0 },
-            &parse_quote! { 'kq_1 },
-            &parse_quote! { 'kp_2 },
-            &parse_quote! { 'vp_0 },
             &parse_quote! { ::atelier_kv_store },
         );
         assert_eq!(
@@ -448,9 +390,9 @@ mod tests {
             parse_quote! {
                 ::atelier_kv_store::ReadWriteTransaction<
                     'txn_0,
-                    &'kq_1 [u8],
-                    &'kp_2 [u8],
-                    &'vp_0 [u8],
+                    [u8],
+                    [u8],
+                    [u8],
                 >
             }
         );
@@ -479,24 +421,19 @@ mod tests {
     /// Tests the `cursor_trait_bound` function.
     #[test]
     fn cursor_trait_bound_test() {
-        let bound = cursor_trait_bound(
-            &parse_quote! { 'cursor },
-            &parse_quote! { 'kq },
-            &parse_quote! { crate },
-        );
+        let bound = cursor_trait_bound(&parse_quote! { 'cursor }, &parse_quote! { crate });
         assert_eq!(
             bound,
             parse_quote! {
                 crate::Cursor<
                     'cursor,
-                    &'kq [u8],
+                    [u8],
                 >
             }
         );
 
         let bound = cursor_trait_bound(
             &parse_quote! { 'cursor_0 },
-            &parse_quote! { 'kq_1 },
             &parse_quote! { ::atelier_kv_store },
         );
         assert_eq!(
@@ -504,7 +441,7 @@ mod tests {
             parse_quote! {
                 ::atelier_kv_store::Cursor<
                     'cursor_0,
-                    &'kq_1 [u8],
+                    [u8],
                 >
             }
         );
@@ -513,30 +450,21 @@ mod tests {
     /// Tests the `rw_cursor_trait_bound` function.
     #[test]
     fn rw_cursor_trait_bound_test() {
-        let bound = rw_cursor_trait_bound(
-            &parse_quote! { 'cursor },
-            &parse_quote! { 'kq },
-            &parse_quote! { 'kp },
-            &parse_quote! { 'vp },
-            &parse_quote! { crate },
-        );
+        let bound = rw_cursor_trait_bound(&parse_quote! { 'cursor }, &parse_quote! { crate });
         assert_eq!(
             bound,
             parse_quote! {
                 crate::ReadWriteCursor<
                     'cursor,
-                    &'kq [u8],
-                    &'kp [u8],
-                    &'vp [u8],
+                    [u8],
+                    [u8],
+                    [u8],
                 >
             }
         );
 
         let bound = rw_cursor_trait_bound(
             &parse_quote! { 'cursor_0 },
-            &parse_quote! { 'kq_1 },
-            &parse_quote! { 'kp_2 },
-            &parse_quote! { 'vp_0 },
             &parse_quote! { ::atelier_kv_store },
         );
         assert_eq!(
@@ -544,9 +472,9 @@ mod tests {
             parse_quote! {
                 ::atelier_kv_store::ReadWriteCursor<
                     'cursor_0,
-                    &'kq_1 [u8],
-                    &'kp_2 [u8],
-                    &'vp_0 [u8],
+                    [u8],
+                    [u8],
+                    [u8],
                 >
             }
         );

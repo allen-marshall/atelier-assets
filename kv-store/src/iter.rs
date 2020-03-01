@@ -34,7 +34,7 @@ enum IterState {
 /// - `C`: Cursor type to wrap.
 /// - `KQ`: Key type that can be used to position the cursor at a specific key.
 #[derive(Debug)]
-pub struct CursorIter<'cursor, C, KQ> {
+pub struct CursorIter<'cursor, C, KQ: ?Sized> {
     /// The wrapped cursor.
     cursor: &'cursor mut C,
 
@@ -44,7 +44,7 @@ pub struct CursorIter<'cursor, C, KQ> {
     phantom: PhantomData<fn(KQ) -> KQ>,
 }
 
-impl<'cursor, C, KQ> CursorIter<'cursor, C, KQ>
+impl<'cursor, C, KQ: ?Sized> CursorIter<'cursor, C, KQ>
 where
     C: CursorBasic,
     for<'cursor2> C: Cursor<'cursor2, KQ>,
@@ -89,7 +89,7 @@ where
     /// there is no such key (assuming no error occurs).
     ///
     /// [iter]: self::CursorIter::iter
-    pub fn iter_from(cursor: &'cursor mut C, key: KQ) -> Result<Self, C::Error> {
+    pub fn iter_from(cursor: &'cursor mut C, key: &KQ) -> Result<Self, C::Error> {
         let cursor_result = cursor.move_to_key_or_after(key).map_err(Into::into)?;
         if cursor_result.is_some() {
             std::mem::drop(cursor_result);
@@ -109,7 +109,7 @@ where
     }
 }
 
-impl<'cursor, C, KQ> Iterator for CursorIter<'cursor, C, KQ>
+impl<'cursor, C, KQ: ?Sized> Iterator for CursorIter<'cursor, C, KQ>
 where
     C: CursorBasic,
     for<'cursor2> C: Cursor<'cursor2, KQ>,
@@ -161,7 +161,7 @@ where
     }
 }
 
-impl<'cursor, C, KQ> FusedIterator for CursorIter<'cursor, C, KQ>
+impl<'cursor, C, KQ: ?Sized> FusedIterator for CursorIter<'cursor, C, KQ>
 where
     C: CursorBasic,
     for<'cursor2> C: Cursor<'cursor2, KQ>,

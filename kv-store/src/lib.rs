@@ -56,7 +56,7 @@ pub trait EnvironmentBasic {
 /// - `KP`: Key type that can be used to insert an entry into a database. May or
 ///   may not be the same as `KQ`.
 /// - `VP`: Value type that can be used to insert an entry into a database.
-pub trait Environment<'env, KQ, KP, VP>: EnvironmentBasic {
+pub trait Environment<'env, KQ: ?Sized, KP: ?Sized, VP: ?Sized>: EnvironmentBasic {
     /// Read-only transaction type that can be opened from the environment.
     type RoTransaction: 'env
         + TransactionBasic<Error = Self::Error, Database = Self::Database>
@@ -101,7 +101,7 @@ pub trait Environment<'env, KQ, KP, VP>: EnvironmentBasic {
 ///
 /// [Environment]: self::Environment
 /// [sync]: self::EnvironmentExt::sync
-pub trait EnvironmentExt<'env, EC, DI, DC, SC, KQ, KP, VP>:
+pub trait EnvironmentExt<'env, EC, DI, DC, SC, KQ: ?Sized, KP: ?Sized, VP: ?Sized>:
     Sized + Environment<'env, KQ, KP, VP>
 {
     /// Configuration information that can be obtained for an individual
@@ -170,6 +170,9 @@ pub trait TransactionBasic {
     /// Handle to an open database.
     type Database;
 
+    /// Type of key data returned from lookup operations.
+    type ReturnedKey: ?Sized;
+
     /// Type of value data returned from lookup operations.
     type ReturnedValue: ?Sized;
 }
@@ -189,7 +192,7 @@ pub trait TransactionBasic {
 /// - `KQ`: Key type that can be used to query a database's key-value store.
 ///
 /// [Clone]: std::clone::Clone
-pub trait Transaction<'txn, KQ>: Sized + TransactionBasic {
+pub trait Transaction<'txn, KQ: ?Sized>: Sized + TransactionBasic {
     /// Configuration information that can be obtained for an individual
     /// database.
     type ReturnedDbConfig;
@@ -198,7 +201,13 @@ pub trait Transaction<'txn, KQ>: Sized + TransactionBasic {
     type ReturnedValueHandle: 'txn + AsRef<Self::ReturnedValue>;
 
     /// Read-only cursor that can be opened within the transaction.
-    type RoCursor: 'txn + CursorBasic<Error = Self::Error> + for<'cursor> Cursor<'cursor, KQ>;
+    type RoCursor: 'txn
+        + CursorBasic<
+            Error = Self::Error,
+            ReturnedKey = Self::ReturnedKey,
+            ReturnedValue = Self::ReturnedValue,
+        >
+        + for<'cursor> Cursor<'cursor, KQ>;
 
     /// Commits the transaction, making any data writes that it performed
     /// potentially visible to future transactions.
@@ -226,7 +235,7 @@ pub trait Transaction<'txn, KQ>: Sized + TransactionBasic {
     fn get(
         &'txn self,
         db: &Self::Database,
-        key: KQ,
+        key: &KQ,
     ) -> Result<Option<Self::ReturnedValueHandle>, Self::Error>
     where
         Self: 'txn;
@@ -250,10 +259,16 @@ pub trait Transaction<'txn, KQ>: Sized + TransactionBasic {
 /// - `KP`: Key type that can be used to insert an entry into a database. May or
 ///   may not be the same as `KQ`.
 /// - `VP`: Value type that can be used to insert an entry into a database.
-pub trait ReadWriteTransaction<'txn, KQ, KP, VP>: Transaction<'txn, KQ> {
+pub trait ReadWriteTransaction<'txn, KQ: ?Sized, KP: ?Sized, VP: ?Sized>:
+    Transaction<'txn, KQ>
+{
     /// Read-write cursor that can be opened within the transaction.
     type RwCursor: 'txn
-        + CursorBasic<Error = Self::Error>
+        + CursorBasic<
+            Error = Self::Error,
+            ReturnedKey = Self::ReturnedKey,
+            ReturnedValue = Self::ReturnedValue,
+        >
         + for<'cursor> Cursor<'cursor, KQ>
         + for<'cursor> ReadWriteCursor<'cursor, KQ, KP, VP>;
 
@@ -263,6 +278,7 @@ pub trait ReadWriteTransaction<'txn, KQ, KP, VP>: Transaction<'txn, KQ> {
         + TransactionBasic<
             Error = Self::Error,
             Database = Self::Database,
+            ReturnedKey = Self::ReturnedKey,
             ReturnedValue = Self::ReturnedValue,
         >
         + for<'child_txn> ReadWriteTransaction<'child_txn, KQ, KP, VP>;
@@ -270,7 +286,7 @@ pub trait ReadWriteTransaction<'txn, KQ, KP, VP>: Transaction<'txn, KQ> {
     /// Stores the specified key-value pair in the specified database. If the
     /// database already contains an entry for the specified key, the old entry
     /// will be overwritten.
-    fn put(&'txn mut self, db: &Self::Database, key: KP, value: VP) -> Result<(), Self::Error>
+    fn put(&'txn mut self, db: &Self::Database, key: &KP, value: &VP) -> Result<(), Self::Error>
     where
         Self: 'txn;
 
@@ -281,8 +297,8 @@ pub trait ReadWriteTransaction<'txn, KQ, KP, VP>: Transaction<'txn, KQ> {
     fn put_no_overwrite(
         &'txn mut self,
         db: &Self::Database,
-        key: KP,
-        value: VP,
+        key: &KP,
+        value: &VP,
     ) -> Result<bool, Self::Error>
     where
         Self: 'txn;
@@ -290,7 +306,7 @@ pub trait ReadWriteTransaction<'txn, KQ, KP, VP>: Transaction<'txn, KQ> {
     /// Deletes the entry for the specified key from the specified database, if
     /// there is such an entry. On success, returns `true` if a deletion was
     /// performed and `false` if the entry to delete did not exist.
-    fn del(&'txn mut self, db: &Self::Database, key: KQ) -> Result<bool, Self::Error>
+    fn del(&'txn mut self, db: &Self::Database, key: &KQ) -> Result<bool, Self::Error>
     where
         Self: 'txn;
 
@@ -396,7 +412,7 @@ pub trait CursorBasic {
 /// - `KQ`: Key type that can be used to position the cursor at a specific key.
 ///
 /// [Ord]: std::cmp::Ord
-pub trait Cursor<'cursor, KQ>: CursorBasic {
+pub trait Cursor<'cursor, KQ: ?Sized>: CursorBasic {
     /// Key object handle type returned from lookup operations.
     type ReturnedKeyHandle: 'cursor + CursorReturnedDataHandle<'cursor, Self::ReturnedKey>;
 
@@ -504,7 +520,7 @@ pub trait Cursor<'cursor, KQ>: CursorBasic {
     /// [None]: std::option::Option::None
     fn move_to_key(
         &'cursor mut self,
-        key: KQ,
+        key: &KQ,
     ) -> Result<Option<Self::ReturnedValueHandle>, Self::Error>
     where
         Self: 'cursor;
@@ -518,7 +534,7 @@ pub trait Cursor<'cursor, KQ>: CursorBasic {
     /// [move_to_key]: self::Cursor::move_to_key
     fn move_to_key_and_get_key(
         &'cursor mut self,
-        key: KQ,
+        key: &KQ,
     ) -> Result<Option<(Self::ReturnedKeyHandle, Self::ReturnedValueHandle)>, Self::Error>
     where
         Self: 'cursor;
@@ -536,7 +552,7 @@ pub trait Cursor<'cursor, KQ>: CursorBasic {
     /// [None]: std::option::Option::None
     fn move_to_key_or_after(
         &'cursor mut self,
-        key: KQ,
+        key: &KQ,
     ) -> Result<Option<(Self::ReturnedKeyHandle, Self::ReturnedValueHandle)>, Self::Error>
     where
         Self: 'cursor;
@@ -550,11 +566,13 @@ pub trait Cursor<'cursor, KQ>: CursorBasic {
 /// - `KP`: Key type that can be used to insert an entry into the database. May
 ///   or may not be the same as `KQ`.
 /// - `VP`: Value type that can be used to insert an entry into the database.
-pub trait ReadWriteCursor<'cursor, KQ, KP, VP>: Cursor<'cursor, KQ> {
+pub trait ReadWriteCursor<'cursor, KQ: ?Sized, KP: ?Sized, VP: ?Sized>:
+    Cursor<'cursor, KQ>
+{
     /// Sets the value of the database entry with the specified key (inserting
     /// the entry if it doesn't already exist), and repositions the cursor to
     /// that key.
-    fn put_and_move_to_key(&'cursor mut self, key: KP, value: VP) -> Result<(), Self::Error>
+    fn put_and_move_to_key(&'cursor mut self, key: &KP, value: &VP) -> Result<(), Self::Error>
     where
         Self: 'cursor;
 
@@ -570,8 +588,8 @@ pub trait ReadWriteCursor<'cursor, KQ, KP, VP>: Cursor<'cursor, KQ> {
     /// [Ok]: std::result::Result::Ok
     fn put_no_overwrite_and_move_to_key(
         &'cursor mut self,
-        key: KP,
-        value: VP,
+        key: &KP,
+        value: &VP,
     ) -> Result<bool, Self::Error>
     where
         Self: 'cursor;

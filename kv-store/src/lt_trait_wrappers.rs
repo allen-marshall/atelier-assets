@@ -19,35 +19,3 @@ where
     T: ?Sized,
 {
 }
-
-/// Wrapper that adds 4 unused lifetime parameters to [`AsRef`][AsRef].
-///
-/// [AsRef]: std::convert::AsRef
-pub trait AsRefLt4<'lt0, 'lt1, 'lt2, 'lt3, T>: AsRef<T>
-where
-    T: ?Sized,
-{
-}
-
-impl<'lt0, 'lt1, 'lt2, 'lt3, T, I> AsRefLt4<'lt0, 'lt1, 'lt2, 'lt3, T> for I
-where
-    I: ?Sized + AsRef<T>,
-    T: ?Sized,
-{
-}
-
-/// Wrapper that adds 5 unused lifetime parameters to [`AsRef`][AsRef].
-///
-/// [AsRef]: std::convert::AsRef
-pub trait AsRefLt5<'lt0, 'lt1, 'lt2, 'lt3, 'lt4, T>: AsRef<T>
-where
-    T: ?Sized,
-{
-}
-
-impl<'lt0, 'lt1, 'lt2, 'lt3, 'lt4, T, I> AsRefLt5<'lt0, 'lt1, 'lt2, 'lt3, 'lt4, T> for I
-where
-    I: ?Sized + AsRef<T>,
-    T: ?Sized,
-{
-}

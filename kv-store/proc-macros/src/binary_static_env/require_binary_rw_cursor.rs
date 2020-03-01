@@ -23,15 +23,6 @@ use syn::{parse2, parse_quote, BoundLifetimes, Lifetime};
 struct BoundsLifetimeNames {
     /// Lifetime name for cursor references.
     cursor_lt: Lifetime,
-
-    /// Lifetime name for key references used in queries.
-    kq_lt: Lifetime,
-
-    /// Lifetime name for key references used in insertions.
-    kp_lt: Lifetime,
-
-    /// Lifetime name for value references used in insertions.
-    vp_lt: Lifetime,
 }
 
 /// Chooses names for the lifetimes to be used in the output of a specific
@@ -53,19 +44,11 @@ fn name_lifetimes(args: &TypeAndCrateRootArgs) -> BoundsLifetimeNames {
     let mut forbidden_finder = LifetimeNameFinder::default();
     visit_type(&mut forbidden_finder, &args.type_arg);
     visit_path(&mut forbidden_finder, &args.crate_root_path);
-    let mut chosen_names = vec![
-        "cursor".to_string(),
-        "kq".to_string(),
-        "kp".to_string(),
-        "vp".to_string(),
-    ];
+    let mut chosen_names = vec!["cursor".to_string()];
     remove_ident_name_conflicts(&mut chosen_names, &forbidden_finder.names_found());
 
     BoundsLifetimeNames {
         cursor_lt: name_to_lifetime(&chosen_names[0]),
-        kq_lt: name_to_lifetime(&chosen_names[1]),
-        kp_lt: name_to_lifetime(&chosen_names[2]),
-        vp_lt: name_to_lifetime(&chosen_names[3]),
     }
 }
 
@@ -85,23 +68,11 @@ pub(crate) fn require_binary_rw_cursor(attr: TokenStream, item: TokenStream) -> 
         let lt_names = name_lifetimes(&args);
 
         // Bring parameters into scope so we can use them in parse_quote.
-        let (cursor_lt, kq_lt, kp_lt, vp_lt, cursor_type) = (
-            &lt_names.cursor_lt,
-            &lt_names.kq_lt,
-            &lt_names.kp_lt,
-            &lt_names.vp_lt,
-            &args.type_arg,
-        );
+        let (cursor_lt, cursor_type) = (&lt_names.cursor_lt, &args.type_arg);
 
-        let lt_quant: BoundLifetimes = parse_quote! { for<#cursor_lt, #kq_lt, #kp_lt, #vp_lt,> };
+        let lt_quant: BoundLifetimes = parse_quote! { for<#cursor_lt,> };
         let cursor_basic_trait = cursor_basic_trait_bound(&args.crate_root_path);
-        let rw_cursor_trait = rw_cursor_trait_bound(
-            &lt_names.cursor_lt,
-            &lt_names.kq_lt,
-            &lt_names.kp_lt,
-            &lt_names.vp_lt,
-            &args.crate_root_path,
-        );
+        let rw_cursor_trait = rw_cursor_trait_bound(&lt_names.cursor_lt, &args.crate_root_path);
 
         // Parse the item and augment its where clause with the required bounds.
         let mut output = parse2(item)?;
@@ -140,9 +111,6 @@ mod tests {
             lt_names,
             BoundsLifetimeNames {
                 cursor_lt: parse_quote! { 'cursor },
-                kq_lt: parse_quote! { 'kq },
-                kp_lt: parse_quote! { 'kp },
-                vp_lt: parse_quote! { 'vp },
             }
         );
 
@@ -151,20 +119,14 @@ mod tests {
             lt_names,
             BoundsLifetimeNames {
                 cursor_lt: parse_quote! { 'cursor },
-                kq_lt: parse_quote! { 'kq },
-                kp_lt: parse_quote! { 'kp },
-                vp_lt: parse_quote! { 'vp },
             }
         );
 
-        let lt_names = name_lifetimes(&parse_quote! { A<'cursor, 'kp> });
+        let lt_names = name_lifetimes(&parse_quote! { A<'cursor> });
         assert_eq!(
             lt_names,
             BoundsLifetimeNames {
                 cursor_lt: parse_quote! { 'cursor_0 },
-                kq_lt: parse_quote! { 'kq },
-                kp_lt: parse_quote! { 'kp_0 },
-                vp_lt: parse_quote! { 'vp },
             }
         );
 
@@ -173,9 +135,6 @@ mod tests {
             lt_names,
             BoundsLifetimeNames {
                 cursor_lt: parse_quote! { 'cursor_2 },
-                kq_lt: parse_quote! { 'kq },
-                kp_lt: parse_quote! { 'kp },
-                vp_lt: parse_quote! { 'vp },
             }
         );
     }
@@ -192,7 +151,7 @@ mod tests {
             test_output,
             parse_quote! {
                 fn do_something<C>(cursor: &mut C) where
-                    for<'cursor, 'kq, 'kp, 'vp,> C: crate::ReadWriteCursor<'cursor, &'kq [u8], &'kp [u8], &'vp [u8],>,
+                    for<'cursor,> C: crate::ReadWriteCursor<'cursor, [u8], [u8], [u8],>,
                     <C as crate::CursorBasic>::ReturnedKey: ::std::convert::AsRef<[u8]>,
                     <C as crate::CursorBasic>::ReturnedValue: ::std::convert::AsRef<[u8]>
                 {}
@@ -209,7 +168,7 @@ mod tests {
             parse_quote! {
                 fn do_something<C>(cursor: &mut C) where
                     C: ::std::fmt::Debug,
-                    for<'cursor_0, 'kq, 'kp, 'vp,> &'cursor C: crate::ReadWriteCursor<'cursor_0, &'kq [u8], &'kp [u8], &'vp [u8],>,
+                    for<'cursor_0,> &'cursor C: crate::ReadWriteCursor<'cursor_0, [u8], [u8], [u8],>,
                     <&'cursor C as crate::CursorBasic>::ReturnedKey: ::std::convert::AsRef<[u8]>,
                     <&'cursor C as crate::CursorBasic>::ReturnedValue: ::std::convert::AsRef<[u8]>
                 {}
@@ -226,7 +185,7 @@ mod tests {
             parse_quote! {
                 fn do_something<C>(cursor: &mut C) where
                     C: ::std::fmt::Debug,
-                    for<'cursor, 'kq, 'kp, 'vp,> C: ::atelier_kv_store::ReadWriteCursor<'cursor, &'kq [u8], &'kp [u8], &'vp [u8],>,
+                    for<'cursor,> C: ::atelier_kv_store::ReadWriteCursor<'cursor, [u8], [u8], [u8],>,
                     <C as ::atelier_kv_store::CursorBasic>::ReturnedKey: ::std::convert::AsRef<[u8]>,
                     <C as ::atelier_kv_store::CursorBasic>::ReturnedValue: ::std::convert::AsRef<[u8]>
                 {}
