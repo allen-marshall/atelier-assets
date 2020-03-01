@@ -74,12 +74,13 @@ fn main_test() {
             let mut nested_txn = txn.begin_nested_txn().unwrap();
             _do_something_with_rw_txn(&mut nested_txn, db, nest_levels - 1);
 
-            // TODO: For some reason, calling methods on a nested transaction
-            //  fails to compile if the calls are made directly, but succeeds if
-            //  the calls are wrapped in a function. I suspect this is a
-            //  compiler bug, but haven't tracked down the details yet.
-
-            // nested_txn.commit().unwrap();
+            // Note: Calling methods on a nested transaction fails to compile if
+            // the calls are made directly, but succeeds if the calls are
+            // wrapped in a function as is done here. I suspect this is related
+            // to the compiler bug documented at
+            // https://github.com/rust-lang/rust/issues/24159 . Until that bug
+            // is fixed, wrapping method calls inside functions as is done here
+            // may be the most feasible workaround.
 
             #[require_binary_txn(T)]
             fn commit<T>(txn: T)
