@@ -802,7 +802,9 @@ mod tests {
         env_builder.set_max_dbs(10);
         let env_cfg = EnvironmentConfig::new(&env_builder, temp_dir.path(), None);
         let db_cfg = lmdb::DatabaseFlags::empty();
-        crate::test_util::basic_error_test::<Environment, _, _, _>(&env_cfg, db_cfg);
+        crate::test_util::binary_static_env::basic_error_test::<Environment, _, _, _>(
+            &env_cfg, db_cfg,
+        );
     }
 
     /// Basic test that creates an empty storage environment, writes some data
@@ -812,6 +814,9 @@ mod tests {
         let mut env_builder = lmdb::Environment::new();
         env_builder.set_max_dbs(10);
         let (mut env, _temp_dir) = make_empty_env(&env_builder);
-        crate::test_util::basic_read_write_test(&mut env, lmdb::DatabaseFlags::empty());
+        crate::test_util::binary_static_env::basic_read_write_test(
+            &mut env,
+            lmdb::DatabaseFlags::empty(),
+        );
     }
 }
