@@ -793,6 +793,18 @@ mod tests {
         (env, temp_dir)
     }
 
+    /// Basic test that performs several operations and makes sure they don't
+    /// return errors except when expected.
+    #[test]
+    fn basic_error_test() {
+        let temp_dir = tempdir().unwrap();
+        let mut env_builder = lmdb::Environment::new();
+        env_builder.set_max_dbs(10);
+        let env_cfg = EnvironmentConfig::new(&env_builder, temp_dir.path(), None);
+        let db_cfg = lmdb::DatabaseFlags::empty();
+        crate::test_util::basic_error_test::<Environment, _, _, _>(&env_cfg, db_cfg);
+    }
+
     /// Basic test that creates an empty storage environment, writes some data
     /// to it, then makes sure it can read the data back.
     #[test]
