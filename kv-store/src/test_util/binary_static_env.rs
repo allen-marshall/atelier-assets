@@ -2,20 +2,69 @@
 //! is `'static` and the keys and values are byte strings.
 
 use crate::iter::CursorIter;
-use crate::{EnvironmentExt, ReadWriteTransaction, Transaction};
+use crate::{CursorReturnedDataHandle, EnvironmentExt, ReadWriteTransaction, Transaction};
 use atelier_kv_store_proc_macros::{
     require_binary_cursor, require_binary_rw_cursor, require_binary_rw_txn,
     require_binary_static_env, require_binary_static_env_ext, require_binary_txn,
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 
-/// A "snapshot" of an environment, consisting of a mapping from database
-/// handles to key-value stores.
+/// A "snapshot" of a database's contents. Contains information about the set of
+/// data entries that are expected to be present in the database at some point
+/// in time, within some transaction's view.
+pub(crate) struct DbTestSnapshot {
+    /// Key-value entries that are expected to be in the database.
+    present_entries: BTreeMap<Vec<u8>, Vec<u8>>,
+
+    /// Optional set of suggested test keys that shouldn't be in the database.
+    absent_test_keys: BTreeSet<Vec<u8>>,
+}
+
+impl DbTestSnapshot {
+    /// Constructor.
+    ///
+    /// # Parameters
+    /// - `present_entries`: Specifies all key-value entries that are expected
+    ///   to be in the database.
+    /// - `absent_test_keys`: Optional set of suggested test keys that shouldn't
+    ///   be in the database.
+    ///
+    /// # Panics
+    /// Panics if `absent_test_keys` overlaps with the set of keys in
+    /// `present_entries`.
+    pub(crate) fn new(
+        present_entries: BTreeMap<Vec<u8>, Vec<u8>>,
+        absent_test_keys: BTreeSet<Vec<u8>>,
+    ) -> Self {
+        if !absent_test_keys.is_disjoint(&present_entries.keys().map(|key| key.to_vec()).collect())
+        {
+            panic!("One of the suggested absent test keys was actually present in the set of expected keys.");
+        }
+        Self {
+            present_entries,
+            absent_test_keys,
+        }
+    }
+
+    /// Gets the set of key-value entries that are expected to be in the
+    /// database.
+    pub(crate) fn present_entries(&self) -> &BTreeMap<Vec<u8>, Vec<u8>> {
+        &self.present_entries
+    }
+
+    /// Gets an optional set of suggested test keys that shouldn't be in the
+    /// database.
+    pub(crate) fn absent_test_keys(&self) -> &BTreeSet<Vec<u8>> {
+        &self.absent_test_keys
+    }
+}
+
+/// A "snapshot" of an environment's database contents.
 ///
 /// # Parameters
 /// - `DB`: Type that represents a database.
-pub(crate) type EnvSnapshot<DB> = BTreeMap<DB, BTreeMap<Vec<u8>, Vec<u8>>>;
+pub(crate) type EnvTestSnapshot<DB> = BTreeMap<DB, DbTestSnapshot>;
 
 /// Represents the ways in which a transaction can be finalized. This can be
 /// used as a parameter to reduce duplication of testing code.
@@ -47,6 +96,260 @@ impl TxnFinalizeMode {
     }
 }
 
+/// Tests read functionality of a newly created transaction, given that the
+/// transaction's view of the environment is expected to have the specified
+/// contents.
+///
+/// # Panics
+/// Panics if a database operation returns an unexpected error or incorrect
+/// data.
+#[require_binary_txn(T, crate)]
+pub(crate) fn test_txn_read<T>(txn: &T, env_contents: &EnvTestSnapshot<T::Database>)
+where
+    T::Error: Debug,
+{
+    // Test basic reading.
+    for (db, snapshot) in env_contents {
+        for (key, value) in snapshot.present_entries() {
+            let returned_value = txn.get(db, key.as_ref()).unwrap().unwrap();
+            assert_eq!(
+                returned_value.as_ref().as_ref(),
+                AsRef::<[u8]>::as_ref(value)
+            );
+        }
+        for absent_key in snapshot.absent_test_keys() {
+            assert!(txn.get(db, absent_key.as_ref()).unwrap().is_none());
+        }
+    }
+
+    // Test read-only cursors.
+    for (db, snapshot) in env_contents {
+        let mut cursor = txn.open_ro_cursor(db).unwrap();
+        test_cursor_read(&mut cursor, snapshot);
+    }
+}
+
+/// Tests read functionality of a newly created transaction, given that the
+/// transaction's view of the environment is expected to have the specified
+/// contents. Finalizes the transaction after testing.
+///
+/// # Panics
+/// Panics if a database operation returns an unexpected error or incorrect
+/// data.
+#[require_binary_txn(T, crate)]
+pub(crate) fn test_txn_read_and_finalize<T>(
+    txn: T,
+    env_contents: &EnvTestSnapshot<T::Database>,
+    finalize_mode: TxnFinalizeMode,
+) where
+    T::Error: Debug,
+{
+    test_txn_read(&txn, env_contents);
+    finalize_mode.finalize_txn(txn).unwrap();
+}
+
+/// Tests read functionality of a newly created cursor, given that the cursor's
+/// associated database is expected to have the specified contents.
+///
+/// # Panics
+/// Panics if a database operation returns an unexpected error or incorrect
+/// data.
+#[require_binary_cursor(C, crate)]
+pub(crate) fn test_cursor_read<C>(cursor: &mut C, db_contents: &DbTestSnapshot)
+where
+    C::Error: Debug,
+{
+    let db_contents_vec: Vec<_> = db_contents.present_entries().clone().into_iter().collect();
+
+    // The cursor is assumed to be in its initial unpositioned state, so it
+    // shouldn't return any data at first when we call get.
+    assert!(cursor.get().unwrap().is_none());
+
+    // Test basic functionality of move_to_first, move_to_last, and get.
+    if db_contents_vec.is_empty() {
+        assert!(cursor.move_to_first().unwrap().is_none());
+        assert!(cursor.move_to_last().unwrap().is_none());
+    } else {
+        let (first_key, first_value) = cursor.move_to_first().unwrap().unwrap();
+        assert_eq!(
+            first_key.get().as_ref(),
+            AsRef::<[u8]>::as_ref(&db_contents_vec[0].0)
+        );
+        assert_eq!(
+            first_value.get().as_ref(),
+            AsRef::<[u8]>::as_ref(&db_contents_vec[0].1)
+        );
+        std::mem::drop((first_key, first_value));
+
+        let (get_first_key, get_first_value) = cursor.get().unwrap().unwrap();
+        assert_eq!(
+            get_first_key.get().as_ref(),
+            AsRef::<[u8]>::as_ref(&db_contents_vec[0].0)
+        );
+        assert_eq!(
+            get_first_value.get().as_ref(),
+            AsRef::<[u8]>::as_ref(&db_contents_vec[0].1)
+        );
+        std::mem::drop((get_first_key, get_first_value));
+
+        let (last_key, last_value) = cursor.move_to_last().unwrap().unwrap();
+        assert_eq!(
+            last_key.get().as_ref(),
+            AsRef::<[u8]>::as_ref(&db_contents_vec[db_contents_vec.len() - 1].0)
+        );
+        assert_eq!(
+            last_value.get().as_ref(),
+            AsRef::<[u8]>::as_ref(&db_contents_vec[db_contents_vec.len() - 1].1)
+        );
+        std::mem::drop((last_key, last_value));
+
+        let (get_last_key, get_last_value) = cursor.get().unwrap().unwrap();
+        assert_eq!(
+            get_last_key.get().as_ref(),
+            AsRef::<[u8]>::as_ref(&db_contents_vec[db_contents_vec.len() - 1].0)
+        );
+        assert_eq!(
+            get_last_value.get().as_ref(),
+            AsRef::<[u8]>::as_ref(&db_contents_vec[db_contents_vec.len() - 1].1)
+        );
+    }
+
+    // Test basic functionality of move_to_next.
+    if !db_contents_vec.is_empty() {
+        cursor.move_to_first().unwrap();
+        let mut idx = 0usize;
+        while idx + 1 < db_contents_vec.len() {
+            let (next_key, next_value) = cursor.move_to_next().unwrap().unwrap();
+            idx += 1;
+            assert_eq!(
+                next_key.get().as_ref(),
+                AsRef::<[u8]>::as_ref(&db_contents_vec[idx].0)
+            );
+            assert_eq!(
+                next_value.get().as_ref(),
+                AsRef::<[u8]>::as_ref(&db_contents_vec[idx].1)
+            );
+        }
+        assert!(cursor.move_to_next().unwrap().is_none());
+    }
+
+    // Test basic functionality of move_to_prev.
+    if !db_contents_vec.is_empty() {
+        cursor.move_to_last().unwrap();
+        let mut idx = db_contents_vec.len() - 1;
+        while idx > 0 {
+            let (prev_key, prev_value) = cursor.move_to_prev().unwrap().unwrap();
+            idx -= 1;
+            assert_eq!(
+                prev_key.get().as_ref(),
+                AsRef::<[u8]>::as_ref(&db_contents_vec[idx].0)
+            );
+            assert_eq!(
+                prev_value.get().as_ref(),
+                AsRef::<[u8]>::as_ref(&db_contents_vec[idx].1)
+            );
+        }
+        assert!(cursor.move_to_prev().unwrap().is_none());
+    }
+
+    // Test basic functionality of move_to_key.
+    for (key, value) in &db_contents_vec {
+        let returned_value = cursor.move_to_key(key.as_ref()).unwrap().unwrap();
+        assert_eq!(returned_value.get().as_ref(), AsRef::<[u8]>::as_ref(&value));
+    }
+    for absent_key in db_contents.absent_test_keys() {
+        assert!(cursor.move_to_key(absent_key).unwrap().is_none());
+    }
+
+    // Test basic functionality of move_to_key_and_get_key.
+    for (key, value) in &db_contents_vec {
+        let (returned_key, returned_value) = cursor
+            .move_to_key_and_get_key(key.as_ref())
+            .unwrap()
+            .unwrap();
+        assert_eq!(returned_key.get().as_ref(), AsRef::<[u8]>::as_ref(&key));
+        assert_eq!(returned_value.get().as_ref(), AsRef::<[u8]>::as_ref(&value));
+    }
+    for absent_key in db_contents.absent_test_keys() {
+        assert!(cursor
+            .move_to_key_and_get_key(absent_key.as_ref())
+            .unwrap()
+            .is_none());
+    }
+
+    // Test basic functionality of move_to_key_or_after.
+    for (key, value) in &db_contents_vec {
+        let (returned_key, returned_value) =
+            cursor.move_to_key_or_after(key.as_ref()).unwrap().unwrap();
+        assert_eq!(returned_key.get().as_ref(), AsRef::<[u8]>::as_ref(&key));
+        assert_eq!(returned_value.get().as_ref(), AsRef::<[u8]>::as_ref(&value));
+    }
+    for absent_key in db_contents.absent_test_keys() {
+        let expected_idx = db_contents_vec
+            .binary_search_by_key(&absent_key, |(key, _)| key)
+            .unwrap_err();
+        if expected_idx >= db_contents_vec.len() {
+            assert!(cursor
+                .move_to_key_or_after(absent_key.as_ref())
+                .unwrap()
+                .is_none());
+        } else {
+            let (returned_key, returned_value) = cursor
+                .move_to_key_or_after(absent_key.as_ref())
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                returned_key.get().as_ref(),
+                AsRef::<[u8]>::as_ref(&db_contents_vec[expected_idx].0)
+            );
+            assert_eq!(
+                returned_value.get().as_ref(),
+                AsRef::<[u8]>::as_ref(&db_contents_vec[expected_idx].1)
+            );
+        }
+    }
+
+    // Test iteration functionality starting from the first key.
+    let iter = CursorIter::iter_start(cursor).unwrap();
+    let iter_output: Vec<_> = iter
+        .map(|result| result.unwrap())
+        .map(|(key, value)| (key.as_ref().to_vec(), value.as_ref().to_vec()))
+        .collect();
+    assert_eq!(iter_output, db_contents_vec);
+
+    // Test iteration functionality starting from the current key.
+    for idx in 0..db_contents_vec.len() {
+        cursor.move_to_key(db_contents_vec[idx].0.as_ref()).unwrap();
+        let iter = CursorIter::iter(cursor).unwrap();
+        let iter_output: Vec<_> = iter
+            .map(|result| result.unwrap())
+            .map(|(key, value)| (key.as_ref().to_vec(), value.as_ref().to_vec()))
+            .collect();
+        assert_eq!(iter_output, db_contents_vec[(idx + 1)..].to_vec());
+    }
+
+    // Test iteration functionality starting from a specified key.
+    for idx in 0..db_contents_vec.len() {
+        let iter = CursorIter::iter_from(cursor, db_contents_vec[idx].0.as_ref()).unwrap();
+        let iter_output: Vec<_> = iter
+            .map(|result| result.unwrap())
+            .map(|(key, value)| (key.as_ref().to_vec(), value.as_ref().to_vec()))
+            .collect();
+        assert_eq!(iter_output, db_contents_vec[idx..].to_vec());
+    }
+    for absent_key in db_contents.absent_test_keys() {
+        let expected_idx = db_contents_vec
+            .binary_search_by_key(&absent_key, |(key, _)| key)
+            .unwrap_err();
+        let iter = CursorIter::iter_from(cursor, absent_key.as_ref()).unwrap();
+        let iter_output: Vec<_> = iter
+            .map(|result| result.unwrap())
+            .map(|(key, value)| (key.as_ref().to_vec(), value.as_ref().to_vec()))
+            .collect();
+        assert_eq!(iter_output, db_contents_vec[expected_idx..].to_vec());
+    }
+}
+
 /// Converts an environment snapshot with databases represented by database
 /// name strings into an equivalent snapshot with databases represented by
 /// active database handles. The databases mentioned in the snapshot are
@@ -64,9 +367,9 @@ impl TxnFinalizeMode {
 #[require_binary_static_env_ext(E, EC, DC, SC, crate)]
 pub(crate) fn create_dbs_for_snapshot<E, EC, DC, SC>(
     env: &mut E,
-    snapshot: EnvSnapshot<Option<&str>>,
+    snapshot: EnvTestSnapshot<Option<&str>>,
     db_cfg: DC,
-) -> EnvSnapshot<E::Database>
+) -> EnvTestSnapshot<E::Database>
 where
     DC: Clone,
     E::Error: Debug,
@@ -93,37 +396,38 @@ where
 /// Panics if the storage environment returns an unexpected error, or if the
 /// environment contents do not match the snapshot.
 #[require_binary_static_env(E, crate)]
-pub(crate) fn test_db_contents_equal<E>(env: &E, expected: &EnvSnapshot<E::Database>)
+pub(crate) fn test_db_contents_equal<E>(env: &E, expected: &EnvTestSnapshot<E::Database>)
 where
     E::Error: Debug,
     E::Database: Ord,
 {
-    // Test that we can retrieve the expected contents through a read-only transaction.
-    let ro_txn = env.begin_ro_txn().unwrap();
-    for (db, expected_db_contents) in expected.iter() {
-        for (key, value) in expected_db_contents {
-            assert_eq!(
-                ro_txn.get(db, key).unwrap().unwrap().as_ref().as_ref(),
-                &**value
-            );
-        }
-    }
-    ro_txn.abort();
+    // Test that we can retrieve the expected contents through a read-only
+    // transaction.
+    test_txn_read_and_finalize(
+        env.begin_ro_txn().unwrap(),
+        expected,
+        TxnFinalizeMode::Commit,
+    );
+    test_txn_read_and_finalize(
+        env.begin_ro_txn().unwrap(),
+        expected,
+        TxnFinalizeMode::Abort,
+    );
+    test_txn_read_and_finalize(env.begin_ro_txn().unwrap(), expected, TxnFinalizeMode::Drop);
 
-    // Test that we can retrieve the expected contents through a read-write transaction.
-    let rw_txn = env.begin_rw_txn().unwrap();
-    for (db, expected_db_contents) in expected.iter() {
-        for (key, value) in expected_db_contents {
-            assert_eq!(
-                rw_txn.get(db, key).unwrap().unwrap().as_ref().as_ref(),
-                &**value
-            );
-        }
-    }
-    rw_txn.abort();
-
-    // TODO: Also test using cursors. Currently, we aren't verifying that
-    //  there is no extra data.
+    // Test that we can retrieve the expected contents through a read-write
+    // transaction.
+    test_txn_read_and_finalize(
+        env.begin_rw_txn().unwrap(),
+        expected,
+        TxnFinalizeMode::Commit,
+    );
+    test_txn_read_and_finalize(
+        env.begin_rw_txn().unwrap(),
+        expected,
+        TxnFinalizeMode::Abort,
+    );
+    test_txn_read_and_finalize(env.begin_rw_txn().unwrap(), expected, TxnFinalizeMode::Drop);
 }
 
 /// Inserts all the key-value pairs from the specified snapshot into the
@@ -138,17 +442,15 @@ where
 /// # Panics
 /// Panics if the storage environment returns an unexpected error.
 #[require_binary_static_env(E, crate)]
-pub(crate) fn add_db_contents<E>(env: &mut E, contents_to_add: &EnvSnapshot<E::Database>)
+pub(crate) fn add_db_contents<E>(env: &mut E, contents_to_add: &EnvTestSnapshot<E::Database>)
 where
     E::Error: Debug,
     E::Database: Ord,
 {
     let mut rw_txn = env.begin_rw_txn().unwrap();
     for (db, db_contents_to_add) in contents_to_add.iter() {
-        for (key, value) in db_contents_to_add {
-            rw_txn
-                .put(db, AsRef::<[u8]>::as_ref(key), AsRef::<[u8]>::as_ref(value))
-                .unwrap();
+        for (key, value) in db_contents_to_add.present_entries() {
+            rw_txn.put(db, key.as_ref(), value.as_ref()).unwrap();
         }
     }
     rw_txn.commit().unwrap()
@@ -331,36 +633,61 @@ where
     E::Database: Ord,
 {
     // Make some test data.
-    let mut contents = BTreeMap::new();
-    contents.insert(None, BTreeMap::new());
-    contents.insert(Some("db0"), BTreeMap::new());
-    contents.insert(Some("db1"), BTreeMap::new());
-    contents
-        .get_mut(&None)
-        .unwrap()
-        .insert(b"Respond with space.".to_vec(), b" ".to_vec());
-    contents
-        .get_mut(&None)
-        .unwrap()
-        .insert(b"Is this the default database?".to_vec(), b"yes".to_vec());
-    contents
-        .get_mut(&None)
-        .unwrap()
-        .insert(b"Is it being used for testing?".to_vec(), b"yes".to_vec());
-    contents
-        .get_mut(&None)
-        .unwrap()
-        .insert(b"What is stored in it?".to_vec(), b"data".to_vec());
-    contents
-        .get_mut(&Some("db0"))
-        .unwrap()
-        .insert(b" ".to_vec(), b"Space".to_vec());
-    contents
-        .get_mut(&Some("db0"))
-        .unwrap()
-        .insert(b"2 + 2".to_vec(), b"4".to_vec());
 
-    let contents = create_dbs_for_snapshot(env, contents, db_cfg);
-    add_db_contents(env, &contents);
-    test_db_contents_equal(env, &contents);
+    let db_0_contents: BTreeMap<_, _> = vec![
+        (b"Respond with space.".to_vec(), b" ".to_vec()),
+        (b"Is this the default database?".to_vec(), b"yes".to_vec()),
+        (b"Is it being used for testing?".to_vec(), b"yes".to_vec()),
+        (b"What is stored in it?".to_vec(), b"data".to_vec()),
+    ]
+    .into_iter()
+    .collect();
+    let db_0_absent_keys: BTreeSet<_> = vec![
+        (b"Don't insert this key.".to_vec()),
+        (b"What could happen if this key is inserted?".to_vec()),
+    ]
+    .into_iter()
+    .collect();
+
+    let db_1_contents: BTreeMap<_, _> = vec![
+        (b" ".to_vec(), b"Space".to_vec()),
+        (b"2 + 2".to_vec(), b"4".to_vec()),
+    ]
+    .into_iter()
+    .collect();
+    let db_1_absent_keys: BTreeSet<_> =
+        vec![(b"null".to_vec()), (b"2".to_vec()), (b"2 + 4".to_vec())]
+            .into_iter()
+            .collect();
+
+    let db_2_contents = BTreeMap::new();
+    let db_2_absent_keys: BTreeSet<_> = vec![
+        (b"the".to_vec()),
+        (b"database".to_vec()),
+        (b"is".to_vec()),
+        (b"empty".to_vec()),
+    ]
+    .into_iter()
+    .collect();
+
+    let env_contents: EnvTestSnapshot<_> = vec![
+        (
+            Some("db0"),
+            DbTestSnapshot::new(db_0_contents, db_0_absent_keys),
+        ),
+        (
+            Some("db1"),
+            DbTestSnapshot::new(db_1_contents, db_1_absent_keys),
+        ),
+        (
+            Some("db2"),
+            DbTestSnapshot::new(db_2_contents, db_2_absent_keys),
+        ),
+    ]
+    .into_iter()
+    .collect();
+
+    let env_contents = create_dbs_for_snapshot(env, env_contents, db_cfg);
+    add_db_contents(env, &env_contents);
+    test_db_contents_equal(env, &env_contents);
 }
