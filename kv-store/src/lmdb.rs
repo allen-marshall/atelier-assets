@@ -551,7 +551,17 @@ impl<'txn, 'cursor> crate::Cursor<'cursor, [u8]> for RoCursor<'txn> {
     where
         Self: 'cursor,
     {
-        lmdb_cursor_result_to_kv_pair(self.0.get(None, None, lmdb_sys::MDB_GET_CURRENT))
+        let output =
+            lmdb_cursor_result_to_kv_pair(self.0.get(None, None, lmdb_sys::MDB_GET_CURRENT));
+
+        // When using MDB_GET_CURRENT, the LMDB API returns EINVAL if the cursor
+        // is in an unpositioned state. In that case, we return Ok(None) instead
+        // of the LMDB error.
+        if let Err(Error::LmdbError(lmdb::Error::Other(libc::EINVAL))) = output {
+            Ok(None)
+        } else {
+            output
+        }
     }
 
     fn move_to_first(
@@ -641,7 +651,17 @@ impl<'txn, 'cursor> crate::Cursor<'cursor, [u8]> for RwCursor<'txn> {
     where
         Self: 'cursor,
     {
-        lmdb_cursor_result_to_kv_pair(self.0.get(None, None, lmdb_sys::MDB_GET_CURRENT))
+        let output =
+            lmdb_cursor_result_to_kv_pair(self.0.get(None, None, lmdb_sys::MDB_GET_CURRENT));
+
+        // When using MDB_GET_CURRENT, the LMDB API returns EINVAL if the cursor
+        // is in an unpositioned state. In that case, we return Ok(None) instead
+        // of the LMDB error.
+        if let Err(Error::LmdbError(lmdb::Error::Other(libc::EINVAL))) = output {
+            Ok(None)
+        } else {
+            output
+        }
     }
 
     fn move_to_first(
