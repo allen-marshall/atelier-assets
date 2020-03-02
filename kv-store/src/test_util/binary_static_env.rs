@@ -1,6 +1,7 @@
 //! Utilities for testing storage implementations where the storage environment
 //! is `'static` and the keys and values are byte strings.
 
+use crate::iter::CursorIter;
 use crate::{EnvironmentExt, ReadWriteTransaction, Transaction};
 use atelier_kv_store_proc_macros::{
     require_binary_cursor, require_binary_rw_cursor, require_binary_rw_txn,
@@ -176,6 +177,16 @@ where
     E::Database: Debug,
 {
     #[require_binary_cursor(C, crate)]
+    fn cursor_iter_test<C>(iter: &mut CursorIter<C, [u8]>)
+    where
+        C::Error: Debug,
+    {
+        for result in iter {
+            result.unwrap();
+        }
+    }
+
+    #[require_binary_cursor(C, crate)]
     fn ro_cursor_test<C>(cursor: &mut C)
     where
         C::Error: Debug,
@@ -188,6 +199,9 @@ where
         cursor.move_to_key(b"test_key").unwrap();
         cursor.move_to_key_and_get_key(b"test_key").unwrap();
         cursor.move_to_key_or_after(b"test_key").unwrap();
+        cursor_iter_test(&mut CursorIter::iter(cursor).unwrap());
+        cursor_iter_test(&mut CursorIter::iter_start(cursor).unwrap());
+        cursor_iter_test(&mut CursorIter::iter_from(cursor, b"test_key").unwrap());
     }
 
     #[require_binary_rw_cursor(C, crate)]
