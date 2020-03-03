@@ -13,7 +13,10 @@ pub enum Error {
     /// Error originating in the wrapped LMDB library.
     LmdbError(lmdb::Error),
 
-    /// Error caused by an invalid or unsupported database configuration.
+    /// Error caused by an unsupported environment configuration.
+    EnvConfigError(EnvConfigError),
+
+    /// Error caused by an unsupported database configuration.
     DbConfigError(DbConfigError),
 }
 
@@ -23,10 +26,39 @@ impl From<lmdb::Error> for Error {
     }
 }
 
+impl From<EnvConfigError> for Error {
+    fn from(src: EnvConfigError) -> Self {
+        Error::EnvConfigError(src)
+    }
+}
+
 impl From<DbConfigError> for Error {
     fn from(src: DbConfigError) -> Self {
         Error::DbConfigError(src)
     }
+}
+
+/// Error type related to configuration of a storage environment
+///
+/// This type is used for conditions that are valid in LMDB itself, but are not
+/// supported by the wrapper. (For conditions that are invalid in LMDB,
+/// [`lmdb::Error`][lmdb::Error] is generally used instead.)
+///
+/// [lmdb::Error]: lmdb::Error
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum EnvConfigError {
+    /// Indicates that the code using the wrapper tried to configure a storage
+    /// environment to use thread-local storage for transactions. This is
+    /// disallowed by the wrapper because it would prevent some types from
+    /// safely implementing [`Send`][Send].
+    ///
+    /// [Send]: std::marker::Send
+    ThreadLocalStorageSpecified,
+
+    /// Indicates that the code using the wrapper tried to configure a storage
+    /// environment to use no locking. This is allowed in raw LMDB but disabled
+    /// by the wrapper for safety reasons.
+    NoLocksSpecified,
 }
 
 /// Error type related to configuration of an individual database within an
@@ -54,28 +86,33 @@ pub enum DbConfigError {
 /// Configuration data needed to initialize the storage environment.
 ///
 /// # Parameters
-/// - `'envb`: Lifetime of the held
-///   [`lmdb::EnvironmentBuilder`][lmdb::EnvironmentBuilder] reference that
-///   defines most of the LMDB configuration options.
 /// - `'path`: Lifetime of the held [`Path`][Path] reference that determines
 ///   where the data is stored on disk.
 ///
-/// [lmdb::EnvironmentBuilder]: lmdb::EnvironmentBuilder
 /// [Path]: std::path::Path
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct EnvironmentConfig<'envb, 'path> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct EnvironmentConfig<'path> {
     // See constructor for documentation of these fields.
-    env_builder: &'envb lmdb::EnvironmentBuilder,
+    env_flags: lmdb::EnvironmentFlags,
+    max_readers: Option<libc::c_uint>,
+    max_dbs: Option<libc::c_uint>,
+    map_size: Option<libc::size_t>,
     open_path: &'path Path,
     open_permissions: Option<lmdb_sys::mode_t>,
 }
 
-impl<'envb, 'path> EnvironmentConfig<'envb, 'path> {
+impl<'path> EnvironmentConfig<'path> {
     /// Constructor.
     ///
     /// # Parameters
-    /// - `env_builder`: LMDB environment builder. Most of the configuration
-    ///   options are stored here.
+    /// - `env_flags`: LMDB environment flags.
+    /// - `max_readers`: Maximum number of concurrently active read transactions
+    ///   that the environment will allow. The default is 126.
+    /// - `max_dbs`: Maximum number of named databases that the environment will
+    ///   allow. The default is normally very low, so this should be specified
+    ///   unless you are just going to use the default unnamed database.
+    /// - `map_size`: Maximum size of the storage data, in bytes. This should be
+    ///   a multiple of the OS page size. The default is 10485760 bytes.
     /// - `open_path`: Path where the data is stored on disk. If this contains
     ///   the null character, environment initialization will return an error.
     /// - `open_permissions`: File permissions with which to open the database
@@ -84,12 +121,18 @@ impl<'envb, 'path> EnvironmentConfig<'envb, 'path> {
     ///
     /// [None]: std::option::Option::None
     pub fn new(
-        env_builder: &'envb lmdb::EnvironmentBuilder,
+        env_flags: lmdb::EnvironmentFlags,
+        max_readers: Option<libc::c_uint>,
+        max_dbs: Option<libc::c_uint>,
+        map_size: Option<libc::size_t>,
         open_path: &'path Path,
         open_permissions: Option<lmdb_sys::mode_t>,
     ) -> Self {
         Self {
-            env_builder,
+            env_flags,
+            max_readers,
+            max_dbs,
+            map_size,
             open_path,
             open_permissions,
         }
@@ -97,12 +140,30 @@ impl<'envb, 'path> EnvironmentConfig<'envb, 'path> {
 
     /// Opens an LMDB environment with the specified configuration.
     fn open(&self) -> Result<lmdb::Environment, Error> {
-        if let Some(open_permissions) = self.open_permissions {
-            self.env_builder
-                .open_with_permissions(self.open_path, open_permissions)
-                .map_err(Into::into)
+        // Check for unsupported environment configuration.
+        if self.env_flags.intersects(lmdb::EnvironmentFlags::NO_LOCK) {
+            Err(EnvConfigError::NoLocksSpecified.into())
+        } else if !self.env_flags.intersects(lmdb::EnvironmentFlags::NO_TLS) {
+            Err(EnvConfigError::ThreadLocalStorageSpecified.into())
         } else {
-            self.env_builder.open(self.open_path).map_err(Into::into)
+            let mut env_builder = lmdb::Environment::new();
+            env_builder.set_flags(self.env_flags);
+            if let Some(max_readers) = self.max_readers {
+                env_builder.set_max_readers(max_readers);
+            }
+            if let Some(max_dbs) = self.max_dbs {
+                env_builder.set_max_dbs(max_dbs);
+            }
+            if let Some(map_size) = self.map_size {
+                env_builder.set_map_size(map_size);
+            }
+            if let Some(open_permissions) = self.open_permissions {
+                env_builder
+                    .open_with_permissions(self.open_path, open_permissions)
+                    .map_err(Into::into)
+            } else {
+                env_builder.open(self.open_path).map_err(Into::into)
+            }
         }
     }
 }
@@ -182,10 +243,10 @@ impl<'env> crate::Environment<'env, [u8], [u8], [u8]> for Environment {
     }
 }
 
-impl<'cfg, 'envb, 'path, 'env, 'dbid>
+impl<'path, 'env, 'dbid>
     crate::EnvironmentExt<
         'env,
-        &'cfg EnvironmentConfig<'envb, 'path>,
+        EnvironmentConfig<'path>,
         Option<&'dbid str>,
         DbConfig,
         SyncConfig,
@@ -196,7 +257,7 @@ impl<'cfg, 'envb, 'path, 'env, 'dbid>
 {
     type ReturnedDbConfig = DbConfig;
 
-    fn new(config: &'cfg EnvironmentConfig<'envb, 'path>) -> Result<Self, Self::Error>
+    fn new(config: EnvironmentConfig<'path>) -> Result<Self, Self::Error>
     where
         Self: 'env,
     {
@@ -268,6 +329,12 @@ impl<'cfg, 'envb, 'path, 'env, 'dbid>
 #[derive(Debug)]
 pub struct RoTransaction<'env>(lmdb::RoTransaction<'env>);
 
+// This should be safe because we always enforce the use of the NO_TLS
+// environment flag, so transactions aren't tied to thread-local storage.
+// However, the guarantees provided by NO_TLS aren't strong enough to also
+// implement Sync.
+unsafe impl<'env> Send for RoTransaction<'env> {}
+
 impl<'env> crate::TransactionBasic for RoTransaction<'env> {
     type Error = Error;
     type Database = Database;
@@ -331,6 +398,12 @@ impl<'env> crate::ActiveRenewable<InactiveRoTransaction<'env>> for RoTransaction
 #[derive(Debug)]
 pub struct InactiveRoTransaction<'env>(lmdb::InactiveTransaction<'env>);
 
+// This should be safe because we always enforce the use of the NO_TLS
+// environment flag, so transactions aren't tied to thread-local storage.
+// However, the guarantees provided by NO_TLS aren't strong enough to also
+// implement Sync.
+unsafe impl<'env> Send for InactiveRoTransaction<'env> {}
+
 impl<'env> crate::InactiveRenewable<RoTransaction<'env>> for InactiveRoTransaction<'env> {
     type Error = Error;
 
@@ -342,6 +415,12 @@ impl<'env> crate::InactiveRenewable<RoTransaction<'env>> for InactiveRoTransacti
 /// Read-write transaction type for the LMDB wrapper.
 #[derive(Debug)]
 pub struct RwTransaction<'env>(lmdb::RwTransaction<'env>);
+
+// This should be safe because we always enforce the use of the NO_TLS
+// environment flag, so transactions aren't tied to thread-local storage.
+// However, the guarantees provided by NO_TLS aren't strong enough to also
+// implement Sync.
+unsafe impl<'env> Send for RwTransaction<'env> {}
 
 impl<'env> crate::TransactionBasic for RwTransaction<'env> {
     type Error = Error;
@@ -535,6 +614,12 @@ fn lmdb_cursor_result_to_value<'cursor>(
 #[derive(Debug)]
 pub struct RoCursor<'txn>(lmdb::RoCursor<'txn>);
 
+// This should be safe because we always enforce the use of the NO_TLS
+// environment flag, so transactions aren't tied to thread-local storage.
+// However, the guarantees provided by NO_TLS aren't strong enough to also
+// implement Sync.
+unsafe impl<'env> Send for RoCursor<'env> {}
+
 impl<'txn> crate::CursorBasic for RoCursor<'txn> {
     type Error = Error;
     type ReturnedKey = [u8];
@@ -634,6 +719,12 @@ impl<'txn, 'cursor> crate::Cursor<'cursor, [u8]> for RoCursor<'txn> {
 /// Read-write cursor type for the LMDB wrapper.
 #[derive(Debug)]
 pub struct RwCursor<'txn>(lmdb::RwCursor<'txn>);
+
+// This should be safe because we always enforce the use of the NO_TLS
+// environment flag, so transactions aren't tied to thread-local storage.
+// However, the guarantees provided by NO_TLS aren't strong enough to also
+// implement Sync.
+unsafe impl<'env> Send for RwCursor<'env> {}
 
 impl<'txn> crate::CursorBasic for RwCursor<'txn> {
     type Error = Error;
@@ -773,37 +864,24 @@ impl<'txn, 'cursor> crate::ReadWriteCursor<'cursor, [u8], [u8], [u8]> for RwCurs
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::{tempdir, TempDir};
-
-    /// Creates a new empty LMDB storage environment in a temporary directory,
-    /// using the specified configuration. The returned handle to the temporary
-    /// directory should be kept alive as long as the environment is in use, as
-    /// dropping it may delete the temporary directory.
-    ///
-    /// # Panics
-    /// Panics if the storage environment returns an unexpected error.
-    fn make_empty_env(env_builder: &lmdb::EnvironmentBuilder) -> (Environment, TempDir) {
-        let temp_dir = tempdir().unwrap();
-        let env = crate::EnvironmentExt::new(&EnvironmentConfig::new(
-            &env_builder,
-            temp_dir.path(),
-            None,
-        ))
-        .unwrap();
-        (env, temp_dir)
-    }
+    use tempfile::tempdir;
 
     /// Basic test that performs several operations and makes sure they don't
     /// return errors except when expected.
     #[test]
     fn basic_error_test() {
         let temp_dir = tempdir().unwrap();
-        let mut env_builder = lmdb::Environment::new();
-        env_builder.set_max_dbs(10);
-        let env_cfg = EnvironmentConfig::new(&env_builder, temp_dir.path(), None);
+        let env_cfg = EnvironmentConfig::new(
+            lmdb::EnvironmentFlags::NO_TLS,
+            None,
+            Some(10),
+            None,
+            temp_dir.path(),
+            None,
+        );
         let db_cfg = lmdb::DatabaseFlags::empty();
         crate::test_util::binary_static_env::basic_error_test::<Environment, _, _, _>(
-            &env_cfg, db_cfg,
+            env_cfg, db_cfg,
         );
     }
 
@@ -811,9 +889,16 @@ mod tests {
     /// to it, then makes sure it can read the data back.
     #[test]
     fn basic_read_write_test() {
-        let mut env_builder = lmdb::Environment::new();
-        env_builder.set_max_dbs(10);
-        let (mut env, _temp_dir) = make_empty_env(&env_builder);
+        let temp_dir = tempdir().unwrap();
+        let mut env: Environment = crate::EnvironmentExt::new(EnvironmentConfig::new(
+            lmdb::EnvironmentFlags::NO_TLS,
+            None,
+            Some(10),
+            None,
+            temp_dir.path(),
+            None,
+        ))
+        .unwrap();
         crate::test_util::binary_static_env::basic_read_write_test(
             &mut env,
             lmdb::DatabaseFlags::empty(),
