@@ -2,8 +2,10 @@
 //! storage API. Since the generic API is largely based on LMDB in the first
 //! place, this implementation should be a thin, inexpensive wrapper.
 
+use bitflags::bitflags;
 use lmdb::{Cursor, Transaction};
 use std::cmp::Ordering;
+use std::convert::{TryFrom, TryInto};
 use std::hash::{Hash, Hasher};
 use std::path::Path;
 
@@ -13,11 +15,9 @@ pub enum Error {
     /// Error originating in the wrapped LMDB library.
     LmdbError(lmdb::Error),
 
-    /// Error caused by an unsupported environment configuration.
-    EnvConfigError(EnvConfigError),
-
-    /// Error caused by an unsupported database configuration.
-    DbConfigError(DbConfigError),
+    /// Error caused by an unsupported database configuration, detected when
+    /// opening a preexisting database.
+    PreexistingDbConfigError(DbConfigError),
 }
 
 impl From<lmdb::Error> for Error {
@@ -26,19 +26,7 @@ impl From<lmdb::Error> for Error {
     }
 }
 
-impl From<EnvConfigError> for Error {
-    fn from(src: EnvConfigError) -> Self {
-        Error::EnvConfigError(src)
-    }
-}
-
-impl From<DbConfigError> for Error {
-    fn from(src: DbConfigError) -> Self {
-        Error::DbConfigError(src)
-    }
-}
-
-/// Error type related to configuration of a storage environment
+/// Error type related to configuration of a storage environment.
 ///
 /// This type is used for conditions that are valid in LMDB itself, but are not
 /// supported by the wrapper. (For conditions that are invalid in LMDB,
@@ -47,22 +35,20 @@ impl From<DbConfigError> for Error {
 /// [lmdb::Error]: lmdb::Error
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum EnvConfigError {
-    /// Indicates that the code using the wrapper tried to configure a storage
-    /// environment to use thread-local storage for transactions. This is
+    /// Error caused by enabling thread-local storage for transactions. This is
     /// disallowed by the wrapper because it would prevent some types from
     /// safely implementing [`Send`][Send].
     ///
     /// [Send]: std::marker::Send
-    ThreadLocalStorageSpecified,
+    ThreadLocalStorageEnabled,
 
-    /// Indicates that the code using the wrapper tried to configure a storage
-    /// environment to use no locking. This is allowed in raw LMDB but disabled
-    /// by the wrapper for safety reasons.
-    NoLocksSpecified,
+    /// Error caused by disabling LMDB's locking mechanisms. This is allowed in
+    /// raw LMDB but disallowed by the wrapper for safety reasons.
+    LocksDisabled,
 }
 
-/// Error type related to configuration of an individual database within an
-/// environment.
+/// Error type related to configuration of an individual database within a
+/// storage environment.
 ///
 /// This type is used for conditions that are valid in LMDB itself, but are not
 /// supported by the wrapper. (For conditions that are invalid in LMDB,
@@ -74,13 +60,98 @@ pub enum EnvConfigError {
 /// [lmdb::Error]: lmdb::Error
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum DbConfigError {
-    /// Indicates that the code using the wrapper tried to configure a database
-    /// with support for duplicate keys.
-    DupKeysSpecified,
+    /// Error caused by enabling duplicate keys in a database.
+    DupKeysEnabled,
+}
 
-    /// Indicates that, when opening a preexisting database, the wrapper found
-    /// that the database had been configured with support for duplicate keys.
-    DupKeysDetected,
+bitflags! {
+    /// Environment options.
+    pub struct EnvironmentFlags: libc::c_uint {
+        /// See [`FIXED_MAP`][FIXED_MAP] in the `lmdb` crate.
+        ///
+        /// [FIXED_MAP]: lmdb::EnvironmentFlags::FIXED_MAP
+        const FIXED_MAP = lmdb_sys::MDB_FIXEDMAP;
+
+        /// See [`NO_SUB_DIR`][NO_SUB_DIR] in the `lmdb` crate.
+        ///
+        /// [NO_SUB_DIR]: lmdb::EnvironmentFlags::NO_SUB_DIR
+        const NO_SUB_DIR = lmdb_sys::MDB_NOSUBDIR;
+
+        /// See [`WRITE_MAP`][WRITE_MAP] in the `lmdb` crate.
+        ///
+        /// [WRITE_MAP]: lmdb::EnvironmentFlags::WRITE_MAP
+        const WRITE_MAP = lmdb_sys::MDB_WRITEMAP;
+
+        /// See [`READ_ONLY`][READ_ONLY] in the `lmdb` crate.
+        ///
+        /// [READ_ONLY]: lmdb::EnvironmentFlags::READ_ONLY
+        const READ_ONLY = lmdb_sys::MDB_RDONLY;
+
+        /// See [`NO_META_SYNC`][NO_META_SYNC] in the `lmdb` crate.
+        ///
+        /// [NO_META_SYNC]: lmdb::EnvironmentFlags::NO_META_SYNC
+        const NO_META_SYNC = lmdb_sys::MDB_NOMETASYNC;
+
+        /// See [`NO_SYNC`][NO_SYNC] in the `lmdb` crate.
+        ///
+        /// [NO_SYNC]: lmdb::EnvironmentFlags::NO_SYNC
+        const NO_SYNC = lmdb_sys::MDB_NOSYNC;
+
+        /// See [`MAP_ASYNC`][MAP_ASYNC] in the `lmdb` crate.
+        ///
+        /// [MAP_ASYNC]: lmdb::EnvironmentFlags::MAP_ASYNC
+        const MAP_ASYNC = lmdb_sys::MDB_MAPASYNC;
+
+        /// See [`NO_READAHEAD`][NO_READAHEAD] in the `lmdb` crate.
+        ///
+        /// [NO_READAHEAD]: lmdb::EnvironmentFlags::NO_READAHEAD
+        const NO_READAHEAD = lmdb_sys::MDB_NORDAHEAD;
+
+        /// See [`NO_MEM_INIT`][NO_MEM_INIT] in the `lmdb` crate.
+        ///
+        /// [NO_MEM_INIT]: lmdb::EnvironmentFlags::NO_MEM_INIT
+        const NO_MEM_INIT = lmdb_sys::MDB_NOMEMINIT;
+
+        // Note: Some flags from the lmdb crate are omitted here because the
+        // wrapper either doesn't support them or requires them to always be
+        // set.
+    }
+}
+
+impl Into<lmdb::EnvironmentFlags> for EnvironmentFlags {
+    fn into(self) -> lmdb::EnvironmentFlags {
+        // All the flags in self::EnvironmentFlags have corresponding flags in
+        // lmdb::EnvironmentFlags that use the same bit positions, so most of
+        // the flags can be transferred over by just copying the bit pattern.
+        let mut output = lmdb::EnvironmentFlags::from_bits(self.bits()).unwrap();
+
+        // Make sure the NO_TLS option is always used. This is necessary in
+        // order to ensure the safety of some Send impls in this module.
+        output |= lmdb::EnvironmentFlags::NO_TLS;
+
+        output
+    }
+}
+
+impl TryFrom<lmdb::EnvironmentFlags> for EnvironmentFlags {
+    type Error = EnvConfigError;
+
+    fn try_from(value: lmdb::EnvironmentFlags) -> Result<Self, Self::Error> {
+        // Check for unsupported settings.
+        if value.intersects(lmdb::EnvironmentFlags::NO_LOCK) {
+            Err(EnvConfigError::LocksDisabled)
+        } else if !value.intersects(lmdb::EnvironmentFlags::NO_TLS) {
+            Err(EnvConfigError::ThreadLocalStorageEnabled)
+        } else {
+            let required_flags = value - lmdb::EnvironmentFlags::NO_TLS;
+
+            // All the flags in self::EnvironmentFlags have corresponding flags
+            // in lmdb::EnvironmentFlags that use the same bit positions, so
+            // most of the flags can be transferred over by just copying the bit
+            // pattern.
+            Ok(Self::from_bits(required_flags.bits()).unwrap())
+        }
+    }
 }
 
 /// Configuration data needed to initialize the storage environment.
@@ -93,7 +164,7 @@ pub enum DbConfigError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct EnvironmentConfig<'path> {
     // See constructor for documentation of these fields.
-    env_flags: lmdb::EnvironmentFlags,
+    env_flags: EnvironmentFlags,
     max_readers: Option<libc::c_uint>,
     max_dbs: Option<libc::c_uint>,
     map_size: Option<libc::size_t>,
@@ -105,7 +176,7 @@ impl<'path> EnvironmentConfig<'path> {
     /// Constructor.
     ///
     /// # Parameters
-    /// - `env_flags`: LMDB environment flags.
+    /// - `env_flags`: Environment flags.
     /// - `max_readers`: Maximum number of concurrently active read transactions
     ///   that the environment will allow. The default is 126.
     /// - `max_dbs`: Maximum number of named databases that the environment will
@@ -121,7 +192,7 @@ impl<'path> EnvironmentConfig<'path> {
     ///
     /// [None]: std::option::Option::None
     pub fn new(
-        env_flags: lmdb::EnvironmentFlags,
+        env_flags: EnvironmentFlags,
         max_readers: Option<libc::c_uint>,
         max_dbs: Option<libc::c_uint>,
         map_size: Option<libc::size_t>,
@@ -140,36 +211,83 @@ impl<'path> EnvironmentConfig<'path> {
 
     /// Opens an LMDB environment with the specified configuration.
     fn open(&self) -> Result<lmdb::Environment, Error> {
-        // Check for unsupported environment configuration.
-        if self.env_flags.intersects(lmdb::EnvironmentFlags::NO_LOCK) {
-            Err(EnvConfigError::NoLocksSpecified.into())
-        } else if !self.env_flags.intersects(lmdb::EnvironmentFlags::NO_TLS) {
-            Err(EnvConfigError::ThreadLocalStorageSpecified.into())
+        let mut env_builder = lmdb::Environment::new();
+        env_builder.set_flags(self.env_flags.into());
+        if let Some(max_readers) = self.max_readers {
+            env_builder.set_max_readers(max_readers);
+        }
+        if let Some(max_dbs) = self.max_dbs {
+            env_builder.set_max_dbs(max_dbs);
+        }
+        if let Some(map_size) = self.map_size {
+            env_builder.set_map_size(map_size);
+        }
+        if let Some(open_permissions) = self.open_permissions {
+            env_builder
+                .open_with_permissions(self.open_path, open_permissions)
+                .map_err(Into::into)
         } else {
-            let mut env_builder = lmdb::Environment::new();
-            env_builder.set_flags(self.env_flags);
-            if let Some(max_readers) = self.max_readers {
-                env_builder.set_max_readers(max_readers);
-            }
-            if let Some(max_dbs) = self.max_dbs {
-                env_builder.set_max_dbs(max_dbs);
-            }
-            if let Some(map_size) = self.map_size {
-                env_builder.set_map_size(map_size);
-            }
-            if let Some(open_permissions) = self.open_permissions {
-                env_builder
-                    .open_with_permissions(self.open_path, open_permissions)
-                    .map_err(Into::into)
-            } else {
-                env_builder.open(self.open_path).map_err(Into::into)
-            }
+            env_builder.open(self.open_path).map_err(Into::into)
         }
     }
 }
 
-/// Configuration data for an individual database within an environment.
-pub type DbConfig = lmdb::DatabaseFlags;
+bitflags! {
+    /// Options for an individual database within a storage environment.
+    pub struct DbFlags: libc::c_uint {
+        /// See [`REVERSE_KEY`][REVERSE_KEY] in the `lmdb` crate.
+        ///
+        /// [REVERSE_KEY]: lmdb::DatabaseFlags::REVERSE_KEY
+        const REVERSE_KEY = lmdb_sys::MDB_REVERSEKEY;
+
+        /// See [`INTEGER_KEY`][INTEGER_KEY] in the `lmdb` crate.
+        ///
+        /// [INTEGER_KEY]: lmdb::DatabaseFlags::INTEGER_KEY
+        const INTEGER_KEY = lmdb_sys::MDB_INTEGERKEY;
+
+        // Note: Some flags from the lmdb crate are omitted here because the
+        // wrapper doesn't support them.
+    }
+}
+
+impl Into<lmdb::DatabaseFlags> for DbFlags {
+    fn into(self) -> lmdb::DatabaseFlags {
+        // All the flags in self::DbFlags have corresponding flags in
+        // lmdb::DatabaseFlags that use the same bit position, so the flags can
+        // be transferred over by just copying the bit pattern.
+        lmdb::DatabaseFlags::from_bits(self.bits()).unwrap()
+    }
+}
+
+impl TryFrom<lmdb::DatabaseFlags> for DbFlags {
+    type Error = DbConfigError;
+
+    fn try_from(value: lmdb::DatabaseFlags) -> Result<Self, Self::Error> {
+        // Check for unsupported settings.
+        if value.intersects(
+            lmdb::DatabaseFlags::DUP_SORT
+                | lmdb::DatabaseFlags::DUP_FIXED
+                | lmdb::DatabaseFlags::INTEGER_DUP
+                | lmdb::DatabaseFlags::REVERSE_DUP,
+        ) {
+            Err(DbConfigError::DupKeysEnabled)
+        } else {
+            // All the flags in self::DbFlags have corresponding flags in
+            // lmdb::DatabaseFlags that use the same bit positions, so the flags
+            // can be transferred over by just copying the bit pattern.
+            Ok(Self::from_bits(value.bits()).unwrap())
+        }
+    }
+}
+
+/// Checks that a specified set of LMDB database flags are supported by the
+/// wrapper. If the flags are not supported, a
+/// [`PreexistingDbConfigError`][PreexistingDbConfigError] value is returned.
+///
+/// [PreexistingDbConfigError]: self::Error::PreexistingDbConfigError
+fn check_db_flags(flags: lmdb::DatabaseFlags) -> Result<DbFlags, Error> {
+    TryInto::<DbFlags>::try_into(flags).map_err(|err| Error::PreexistingDbConfigError(err))
+}
 
 /// Configuration type that can be passed to [`sync`][sync] to control how data
 /// is flushed to disk. A value of `true` means that a synchronous flush should
@@ -208,16 +326,6 @@ impl Hash for Database {
 #[derive(Debug)]
 pub struct Environment(lmdb::Environment);
 
-/// Checks if a database configuration has duplicate keys enabled.
-fn db_config_allows_dup_keys(config: DbConfig) -> bool {
-    config.intersects(
-        lmdb::DatabaseFlags::DUP_SORT
-            | lmdb::DatabaseFlags::DUP_FIXED
-            | lmdb::DatabaseFlags::INTEGER_DUP
-            | lmdb::DatabaseFlags::REVERSE_DUP,
-    )
-}
-
 impl crate::EnvironmentBasic for Environment {
     type Error = Error;
     type Stat = Stat;
@@ -248,14 +356,14 @@ impl<'path, 'env, 'dbid>
         'env,
         EnvironmentConfig<'path>,
         Option<&'dbid str>,
-        DbConfig,
+        DbFlags,
         SyncConfig,
         [u8],
         [u8],
         [u8],
     > for Environment
 {
-    type ReturnedDbConfig = DbConfig;
+    type ReturnedDbConfig = DbFlags;
 
     fn new(config: EnvironmentConfig<'path>) -> Result<Self, Self::Error>
     where
@@ -268,46 +376,37 @@ impl<'path, 'env, 'dbid>
     where
         Self: 'env,
     {
-        let db = self.0.open_db(id)?;
+        let db = Database(self.0.open_db(id)?);
 
         // Make sure we aren't opening a preexisting database with an
         // unsupported configuration.
-        if db_config_allows_dup_keys(self.0.get_db_flags(db)?) {
-            Err(DbConfigError::DupKeysDetected.into())
-        } else {
-            Ok(Database(db))
-        }
+        check_db_flags(self.0.get_db_flags(db.0)?)?;
+
+        Ok(db)
     }
 
     fn create_db(
         &'env mut self,
         id: Option<&'dbid str>,
-        config: DbConfig,
+        config: DbFlags,
     ) -> Result<Self::Database, Self::Error>
     where
         Self: 'env,
     {
-        // Make sure the requested configuration is supported.
-        if db_config_allows_dup_keys(config) {
-            Err(DbConfigError::DupKeysSpecified.into())
-        } else {
-            let db = self.0.create_db(id, config)?;
+        let db = Database(self.0.create_db(id, config.into())?);
 
-            // Make sure we aren't opening a preexisting database with an
-            // unsupported configuration.
-            if db_config_allows_dup_keys(self.0.get_db_flags(db)?) {
-                Err(DbConfigError::DupKeysDetected.into())
-            } else {
-                Ok(Database(db))
-            }
-        }
+        // Make sure we aren't opening a preexisting database with an
+        // unsupported configuration.
+        check_db_flags(self.0.get_db_flags(db.0)?)?;
+
+        Ok(db)
     }
 
     fn db_config(&'env self, db: &Self::Database) -> Result<Self::ReturnedDbConfig, Self::Error>
     where
         Self: 'env,
     {
-        self.0.get_db_flags(db.0).map_err(Into::into)
+        check_db_flags(self.0.get_db_flags(db.0)?)
     }
 
     fn sync(&'env self, config: SyncConfig) -> Result<(), Self::Error>
@@ -343,7 +442,7 @@ impl<'env> crate::TransactionBasic for RoTransaction<'env> {
 }
 
 impl<'env, 'txn> crate::Transaction<'txn, [u8]> for RoTransaction<'env> {
-    type ReturnedDbConfig = DbConfig;
+    type ReturnedDbConfig = DbFlags;
     type ReturnedValueHandle = &'txn [u8];
     type RoCursor = RoCursor<'txn>;
 
@@ -374,7 +473,7 @@ impl<'env, 'txn> crate::Transaction<'txn, [u8]> for RoTransaction<'env> {
     where
         Self: 'txn,
     {
-        self.0.db_flags(db.0).map_err(Into::into)
+        check_db_flags(self.0.db_flags(db.0)?)
     }
 
     fn open_ro_cursor(&'txn self, db: &Self::Database) -> Result<Self::RoCursor, Self::Error>
@@ -430,7 +529,7 @@ impl<'env> crate::TransactionBasic for RwTransaction<'env> {
 }
 
 impl<'env, 'txn> crate::Transaction<'txn, [u8]> for RwTransaction<'env> {
-    type ReturnedDbConfig = DbConfig;
+    type ReturnedDbConfig = DbFlags;
     type ReturnedValueHandle = &'txn [u8];
     type RoCursor = RoCursor<'txn>;
 
@@ -461,7 +560,7 @@ impl<'env, 'txn> crate::Transaction<'txn, [u8]> for RwTransaction<'env> {
     where
         Self: 'txn,
     {
-        self.0.db_flags(db.0).map_err(Into::into)
+        check_db_flags(self.0.db_flags(db.0)?)
     }
 
     fn open_ro_cursor(&'txn self, db: &Self::Database) -> Result<Self::RoCursor, Self::Error>
@@ -872,14 +971,14 @@ mod tests {
     fn basic_error_test() {
         let temp_dir = tempdir().unwrap();
         let env_cfg = EnvironmentConfig::new(
-            lmdb::EnvironmentFlags::NO_TLS,
+            EnvironmentFlags::empty(),
             None,
             Some(10),
             None,
             temp_dir.path(),
             None,
         );
-        let db_cfg = lmdb::DatabaseFlags::empty();
+        let db_cfg = DbFlags::empty();
         crate::test_util::binary_static_env::basic_error_test::<Environment, _, _, _>(
             env_cfg, db_cfg,
         );
@@ -891,7 +990,7 @@ mod tests {
     fn basic_read_write_test() {
         let temp_dir = tempdir().unwrap();
         let mut env: Environment = crate::EnvironmentExt::new(EnvironmentConfig::new(
-            lmdb::EnvironmentFlags::NO_TLS,
+            EnvironmentFlags::empty(),
             None,
             Some(10),
             None,
@@ -899,9 +998,6 @@ mod tests {
             None,
         ))
         .unwrap();
-        crate::test_util::binary_static_env::basic_read_write_test(
-            &mut env,
-            lmdb::DatabaseFlags::empty(),
-        );
+        crate::test_util::binary_static_env::basic_read_write_test(&mut env, DbFlags::empty());
     }
 }

@@ -13,9 +13,10 @@ default = []
 in_mem_impl = []
 
 # This feature enables the LMDB wrapper implementation.
-lmdb_impl = ["libc", "lmdb", "lmdb-sys"]
+lmdb_impl = ["bitflags", "libc", "lmdb", "lmdb-sys"]
 
 [dependencies]
+bitflags = { version = "1.2", optional = true }
 libc = { version = "0.2", optional = true }
 lmdb = { git = "http://github.com/kabergstrom/lmdb-rs", optional = true }
 lmdb-sys = { git = "http://github.com/kabergstrom/lmdb-rs", optional = true }
