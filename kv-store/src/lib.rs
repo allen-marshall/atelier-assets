@@ -11,6 +11,8 @@
 //!
 //! [lmdb]: http://symas.com/mdb/
 
+#[cfg(feature = "in_mem_impl")]
+pub mod in_mem;
 pub mod iter;
 #[cfg(feature = "lmdb_impl")]
 pub mod lmdb;
